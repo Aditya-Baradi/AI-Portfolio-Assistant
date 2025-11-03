@@ -1,133 +1,196 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>AI Portfolio Assistant Chatbot</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-        body { font-family: Arial, sans-serif; background: #f4f6fa; margin: 0; }
-        .chat-container {
-            max-width: 500px;
-            margin: 40px auto;
-            background: #fff;
-            border-radius: 10px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-            display: flex;
-            flex-direction: column;
-            height: 80vh;
-        }
-        .chat-header {
-            padding: 20px;
-            background: #2d6cdf;
-            color: #fff;
-            border-radius: 10px 10px 0 0;
-            font-size: 1.3em;
-            font-weight: bold;
-            text-align: center;
-        }
-        .chat-messages {
-            flex: 1;
-            padding: 20px;
-            overflow-y: auto;
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-        }
-        .message {
-            max-width: 80%;
-            padding: 12px 16px;
-            border-radius: 18px;
-            font-size: 1em;
-            line-height: 1.4;
-        }
-        .user {
-            align-self: flex-end;
-            background: #e3edff;
-            color: #1a2a4f;
-        }
-        .bot {
-            align-self: flex-start;
-            background: #f0f1f6;
-            color: #222;
-        }
-        .chat-input {
-            display: flex;
-            border-top: 1px solid #e0e0e0;
-            padding: 16px;
-            background: #fafbfc;
-            border-radius: 0 0 10px 10px;
-        }
-        .chat-input input {
-            flex: 1;
-            padding: 10px 14px;
-            border: 1px solid #cfd8dc;
-            border-radius: 20px;
-            font-size: 1em;
-            outline: none;
-        }
-        .chat-input button {
-            margin-left: 10px;
-            padding: 10px 20px;
-            background: #2d6cdf;
-            color: #fff;
-            border: none;
-            border-radius: 20px;
-            font-size: 1em;
-            cursor: pointer;
-            transition: background 0.2s;
-        }
-        .chat-input button:hover {
-            background: #1a4fa0;
-        }
-    </style>
+  <meta charset="UTF-8" />
+  <title>AI Portfolio Assistant</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root{
+      --bg:#0b0b0f; --panel:#0f1115; --muted:#a1a7b3; --fg:#e6e7ea;
+      --accent:#10a37f; --accent-2:#2d6cdf; --bubble:#16181d; --bubble-user:#1f2937;
+      --border:#20242c; --radius:14px; --radius-lg:18px;
+      --shadow: 0 0 0 1px rgba(255,255,255,0.03), 0 12px 40px rgba(0,0,0,0.45);
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0; background: var(--bg); color: var(--fg);
+      font: 14px/1.6 system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif;
+      -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+    }
+    .wrap { max-width: 920px; margin: 0 auto; min-height: 100%; display: flex; flex-direction: column; }
+    header { position: sticky; top: 0; z-index: 20; backdrop-filter: saturate(140%) blur(8px);
+      background: color-mix(in srgb, var(--bg) 70%, transparent); border-bottom: 1px solid var(--border); }
+    .brand { display: flex; align-items: center; gap: 10px; padding: 14px 16px; }
+    .logo { width: 28px; height: 28px; border-radius: 8px; background: var(--accent); display: grid; place-items: center;
+      color:#fff; font-weight: 800; box-shadow: 0 0 0 1px rgba(0,0,0,.2), 0 4px 16px rgba(16,163,127,.4); }
+    .brand h1 { margin: 0; font-size: 16px; letter-spacing: .2px; color:#e9ecef; }
+    main { flex: 1; display: flex; justify-content: center; }
+    .panel { width: 100%; padding: 16px; padding-bottom: 140px; }
+    .messages { display: grid; gap: 16px; }
+    .msg { display: grid; grid-template-columns: 40px 1fr; gap: 12px; padding: 16px 18px; border-radius: var(--radius);
+      background: var(--bubble); box-shadow: var(--shadow); border: 1px solid var(--border); }
+    .msg.user { grid-template-columns: 1fr 40px; background: var(--bubble-user); }
+    .avatar { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; font-weight: 700;
+      background: #111418; color:#d7dbdf; border:1px solid var(--border); }
+    .msg.user .avatar { order: 2; background:#0e1723; color:#cfe3ff; }
+    .bubble { white-space: pre-wrap; word-wrap: break-word; color: #e8eaee; font-size: 15px; }
+    .bubble code { background: #0d1117; border: 1px solid #23262e; border-radius: 8px; padding: 2px 6px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; color: #e6edf3; }
+    .bubble pre { background: #0d1117; border: 1px solid #23262e; border-radius: 12px; padding: 14px; overflow:auto; }
+    .muted { color: var(--muted); }
+    .composer { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+      background: linear-gradient(to top, var(--bg), transparent 60%); padding: 20px 16px; }
+    .composer-inner { max-width: 920px; margin: 0 auto; background: var(--panel); border: 1px solid var(--border);
+      border-radius: var(--radius-lg); padding: 10px; display: flex; gap: 10px; align-items: flex-end; box-shadow: var(--shadow); }
+    textarea { resize: none; width: 100%; min-height: 24px; max-height: 180px; background: transparent; color: var(--fg);
+      border: none; outline: none; font: inherit; line-height: 1.6; padding: 8px 10px; }
+    .actions { display: flex; align-items: center; gap: 8px; }
+    .btn { appearance: none; border: 1px solid var(--border); background: #15202b; color: #eaf2ff; padding: 10px 14px;
+      border-radius: 12px; cursor: pointer; font-weight: 600; box-shadow: inset 0 0 0 1px rgba(255,255,255,.02);
+      transition: transform .04s ease, background .15s ease; }
+    .btn:hover { background: #1a2633; }
+    .btn:active { transform: translateY(1px); }
+    .btn.primary { background: var(--accent); border-color: color-mix(in srgb, var(--accent) 60%, black); color:#04110d; }
+    .btn.primary:hover { filter: brightness(1.05); }
+    .typing { display: inline-flex; gap: 4px; align-items: center; }
+    .dot { width: 6px; height: 6px; border-radius: 50%; background:#cbd5e1; animation: blink 1.2s infinite ease-in-out; }
+    .dot:nth-child(2){ animation-delay: .15s; } .dot:nth-child(3){ animation-delay: .3s; }
+    @keyframes blink { 0%, 80%, 100%{ opacity:.25 } 40%{ opacity:1 } }
+    a { color: var(--accent-2); text-decoration: none; } a:hover { text-decoration: underline; }
+  </style>
 </head>
 <body>
-    <div class="chat-container">
-        <div class="chat-header">
-            AI Portfolio Assistant
+  <div class="wrap">
+    <header>
+      <div class="brand">
+        <div class="logo">AI</div>
+        <h1>AI Portfolio Assistant</h1>
+        <div class="muted" style="margin-left:auto;">Chat</div>
+      </div>
+    </header>
+
+    <main>
+      <div class="panel">
+        <div id="messages" class="messages">
+          <div class="msg">
+            <div class="avatar">A</div>
+            <div class="bubble">Hello! I’m your AI financial assistant. How can I help you today?</div>
+          </div>
         </div>
-        <div class="chat-messages" id="chatMessages">
-            <div class="message bot">Hello! I'm your AI financial assistant. How can I help you today?</div>
+      </div>
+    </main>
+
+    <div class="composer">
+      <form id="chatForm" class="composer-inner" autocomplete="off">
+        <textarea id="input" rows="1" placeholder="Message AI Portfolio Assistant…"></textarea>
+        <div class="actions">
+          <button class="btn" type="button" id="clearBtn" title="Clear">Clear</button>
+          <button class="btn primary" type="submit" id="sendBtn" title="Send">Send</button>
         </div>
-        <form class="chat-input" id="chatForm" autocomplete="off">
-            <input type="text" id="userInput" placeholder="Type your message..." required />
-            <button type="submit">Send</button>
-        </form>
+      </form>
     </div>
-    <script>
-        const chatMessages = document.getElementById('chatMessages');
-        const chatForm = document.getElementById('chatForm');
-        const userInput = document.getElementById('userInput');
+  </div>
 
-        // Dummy AI response for demonstration
-        function getAIResponse(message) {
-            // Replace this with actual API call to your AI backend
-            return "I'm here to assist you with your portfolio. (This is a demo response.)";
+  <script>
+    const elMessages = document.getElementById('messages');
+    const elForm = document.getElementById('chatForm');
+    const elInput = document.getElementById('input');
+    const elClear = document.getElementById('clearBtn');
+
+    function autogrow() {
+      elInput.style.height = 'auto';
+      elInput.style.height = Math.min(elInput.scrollHeight, 180) + 'px';
+    }
+    elInput.addEventListener('input', autogrow);
+    autogrow();
+
+    function addMessage({ text, role }) {
+      const msg = document.createElement('div');
+      msg.className = 'msg' + (role === 'user' ? ' user' : '');
+      const avatar = document.createElement('div');
+      avatar.className = 'avatar';
+      avatar.textContent = role === 'user' ? 'You' : 'A';
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble';
+      bubble.textContent = text || '';
+      if (role === 'user') { msg.appendChild(bubble); msg.appendChild(avatar); }
+      else { msg.appendChild(avatar); msg.appendChild(bubble); }
+      elMessages.appendChild(msg);
+      window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+      return bubble;
+    }
+
+    // Minimal SSE parser for POST fetch streams (lines: "data: {...}\n\n")
+    function sseParser(onDelta, onDone, onError) {
+      let buffer = '';
+      return (chunk) => {
+        buffer += chunk;
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop(); // keep last partial
+        for (const part of parts) {
+          const line = part.trim();
+          if (!line.startsWith('data:')) continue;
+          const json = line.slice(5).trim();
+          try {
+            const obj = JSON.parse(json);
+            if (obj.delta) onDelta(obj.delta);
+            else if (obj.event === 'done') onDone?.();
+            else if (obj.error) onError?.(obj.error);
+          } catch {
+            onError?.('Bad SSE JSON');
+          }
         }
+      };
+    }
 
-        chatForm.addEventListener('submit', function(e) {
-            e.preventDefault();
-            const message = userInput.value.trim();
-            if (!message) return;
+    async function chatRequestStream(message, onDelta) {
+      const res = await fetch('/v1/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [{ role: 'user', content: message }],
+          stream: true
+        })
+      });
+      if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
 
-            // Add user message
-            const userMsg = document.createElement('div');
-            userMsg.className = 'message user';
-            userMsg.textContent = message;
-            chatMessages.appendChild(userMsg);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      const feed = sseParser(
+        (delta) => onDelta(delta),
+        () => {},
+        (err) => console.error('SSE error:', err)
+      );
 
-            userInput.value = '';
-            chatMessages.scrollTop = chatMessages.scrollHeight;
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        feed(decoder.decode(value, { stream: true }));
+      }
+    }
 
-            // Simulate AI response
-            setTimeout(() => {
-                const botMsg = document.createElement('div');
-                botMsg.className = 'message bot';
-                botMsg.textContent = getAIResponse(message);
-                chatMessages.appendChild(botMsg);
-                chatMessages.scrollTop = chatMessages.scrollHeight;
-            }, 700);
+    elForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const message = elInput.value.trim();
+      if (!message) return;
+
+      addMessage({ text: message, role: 'user' });
+      elInput.value = '';
+      autogrow();
+
+      const bubble = addMessage({ text: '', role: 'assistant' });
+      try {
+        await chatRequestStream(message, (delta) => {
+          bubble.textContent += delta;
+          window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
         });
-    </script>
+      } catch (err) {
+        bubble.innerHTML = `<span class="muted">Error: ${err.message}</span>`;
+      }
+    });
+
+    elClear.addEventListener('click', () => (elMessages.innerHTML = ''));
+  </script>
 </body>
 </html>
