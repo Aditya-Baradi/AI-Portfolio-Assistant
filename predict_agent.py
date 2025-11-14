@@ -23,13 +23,13 @@ try:
     try:
         DRLAgent = import_module("finrl.agents.stablebaselines3.models").DRLAgent
     except ModuleNotFoundError:
-        DRLAgent = import_module("finrl.agents.stable_baselines3.models").DRLAgent  # older variants
+        DRLAgent = import_module("finrl.agents.stable_baselines3.models").DRLAgent  
 
 
     StockPortfolioEnv = None
     for mod in (
-        "finrl.meta.env_portfolio.env_portfolio",  # newer
-        "finrl.env.env_portfolio",                 # older
+        "finrl.meta.env_portfolio.env_portfolio",  
+        "finrl.env.env_portfolio",                 
     ):
         try:
             StockPortfolioEnv = getattr(import_module(mod), "StockPortfolioEnv")
@@ -45,7 +45,7 @@ try:
 except Exception as e:
     warnings.warn(f"FinRL not available ({e}); will use PyPortfolioOpt fallback.")
 
-# ---------- Config ----------
+
 
 GICS_SECTORS = {
     "Energy", "Materials", "Industrials", "Consumer Discretionary",
@@ -67,11 +67,10 @@ ETF_TICKERS = {
     "XLK","XLF","XLV","XLY","XLP","XLE","XLU","XLRE","XLC","XLB","XLI"
 }
 
-# Threshold (%) to call a sector "underweighted" in the recommended allocation
 THRESH = 0.5
 
 
-# ---------- Utilities ----------
+
 
 def load_tickers_from_portfolio_json(json_path, include_etfs=False):
     """Read your portfolio.json and return a de-duplicated list of tickers and a market value map."""
@@ -83,7 +82,7 @@ def load_tickers_from_portfolio_json(json_path, include_etfs=False):
         ticker = (
             item.get("Sym/Cusip")
             or item.get("Symbol")
-            or item.get("Ticker")
+            or item.get("ticker")
             or item.get("Name")
         )
         if not ticker:
@@ -93,7 +92,7 @@ def load_tickers_from_portfolio_json(json_path, include_etfs=False):
             continue
         tickers.append(t)
 
-        mv = item.get("Mkt Value") or item.get("MktValue") or item.get("Market Value")
+        mv = item.get("Mkt Value") or item.get("MktValue") or item.get("current_dollars")
         if mv is not None:
             mv_str = str(mv).replace("$", "").replace(",", "").strip()
             try:
@@ -101,8 +100,8 @@ def load_tickers_from_portfolio_json(json_path, include_etfs=False):
             except ValueError:
                 pass
 
-    tickers = list(dict.fromkeys(tickers))  # de-dup, keep order
-    return tickers, weights  # weights is optional (may be empty)
+    tickers = list(dict.fromkeys(tickers))  
+    return tickers, weights  
 
 
 def get_sector_map(tickers):
@@ -160,7 +159,7 @@ def _download_price_matrix(tickers, start_date, end_date):
             else:
                 prices = df2["Close"]
     else:
-        # Single ticker: columns like ['Open','High','Low','Close','Volume'] when auto_adjust=True
+        
         if "Close" in df.columns:
             prices = df[["Close"]].copy()
             colname = tickers[0] if isinstance(tickers, (list, tuple)) else str(tickers)
@@ -182,7 +181,7 @@ def _download_price_matrix(tickers, start_date, end_date):
     return prices
 
 
-# ---------- FinRL pipeline ----------
+
 
 def run_finrl_portfolio_optimization(tickers, start_date, end_date, timesteps=50_000):
     """
@@ -191,19 +190,19 @@ def run_finrl_portfolio_optimization(tickers, start_date, end_date, timesteps=50
     if not FINRL_AVAILABLE:
         raise ImportError("FinRL not installed/available")
 
-    # 1) Download & preprocess with FinRL's DataProcessor
+    
     dp = DataProcessor(data_source="yahoofinance",
                        start_date=start_date, end_date=end_date, time_interval="1D")
     dp.download_data(ticker_list=tickers)
     dp.clean_data()
-    techs = ["macd", "rsi_30", "cci_30", "dx_30"]  # light set
+    techs = ["macd", "rsi_30", "cci_30", "dx_30"]  
     dp.add_technical_indicator(tech_indicator_list=techs)
 
-    data = dp.dataframe  # FinRL stores aggregated data here
+    data = dp.dataframe  
     if not isinstance(data, pd.DataFrame) or data.empty:
         raise ValueError("No data returned by DataProcessor")
 
-    # 2) Train/test split
+   
     split_date = (pd.to_datetime(start_date) + pd.Timedelta(days=int((pd.to_datetime(end_date) - pd.to_datetime(start_date)).days * 0.8))).strftime("%Y-%m-%d")
     train = data[data.date < split_date]
     trade = data[data.date >= split_date]
@@ -227,21 +226,21 @@ def run_finrl_portfolio_optimization(tickers, start_date, end_date, timesteps=50
     env_train = StockPortfolioEnv(df=train, **env_kwargs)
     env_trade = StockPortfolioEnv(df=trade, **env_kwargs)
 
-    # 3) Agent & training
+   
     agent = DRLAgent(env=env_train)
     model = agent.get_model("ppo", policy="MlpPolicy")
     trained = agent.train_model(model=model, total_timesteps=timesteps)
 
-    # 4) Inference (get account value + action (weights) dataframe)
+    
     df_account_value, df_actions = agent.DRL_prediction(model=trained, environment=env_trade)
 
-    # Final allocation = last row of actions (normalized weights per asset)
+    
     if list(df_actions.columns) == tickers:
         allocation = {t: float(df_actions.iloc[-1][t]) for t in tickers}
     else:
         allocation = {tickers[i]: float(df_actions.iloc[-1, i]) for i in range(len(tickers))}
 
-    # Normalize to sum 1.0
+    
     s = sum(abs(w) for w in allocation.values())
     if s > 0:
         allocation = {t: round(abs(w) / s, 6) for t, w in allocation.items()}
@@ -258,7 +257,7 @@ def compute_portfolio_value(mv_map: dict | None, default_if_missing: float = 10_
         total = sum(v for v in mv_map.values() if isinstance(v, (int, float)))
         if total > 0:
             return float(total)
-    # Fallback if your JSON didn't include MktValue (you can override via function arg later)
+    
     return float(default_if_missing)
 
 
@@ -276,19 +275,19 @@ def get_last_prices(tickers: list[str]) -> dict[str, float]:
     df = yf.download(tickers, period="5d", interval="1d", auto_adjust=True, progress=False)
     if df is None or df.empty:
         return {}
-    # Handle MultiIndex vs flat columns
+    
     try:
         if isinstance(df.columns, pd.MultiIndex):
-            # prefer adjusted Close
+            
             prices = df["Close"].ffill().iloc[-1]
             return {str(k): float(v) for k, v in prices.items()}
         else:
-            # single ticker: columns include 'Close'
+            
             price = float(df["Close"].ffill().iloc[-1])
             name = tickers[0] if tickers else "TICKER"
             return {str(name): price}
     except Exception:
-        # Last-ditch: take last row and try to infer
+       
         last = df.ffill().iloc[-1]
         if isinstance(last, pd.Series):
             return {str(k): float(v) for k, v in last.items() if isinstance(v, (int, float, np.floating))}
@@ -309,7 +308,7 @@ def build_trade_plan(
     - min_trade_dollars: ignore tiny adjustments
     - fractional_ok: if True, shares can be fractional; else we floor to whole shares
     """
-    # ensure we include names that are in either side
+    
     all_tickers = sorted(set(current_values.keys()) | set(dollar_targets.keys()))
     plan = {}
 
@@ -318,7 +317,7 @@ def build_trade_plan(
         tgt = float(dollar_targets.get(t, 0.0))
         delta = round(tgt - cur, 2)
 
-        # default action
+        
         action = "HOLD"
         if delta > min_trade_dollars:
             action = "BUY"
@@ -332,7 +331,7 @@ def build_trade_plan(
             if fractional_ok:
                 est_shares = round(raw_shares, share_precision)
             else:
-                # buy → floor positive; sell → floor abs then sign
+                
                 if raw_shares > 0:
                     est_shares = float(floor(raw_shares))
                 else:
@@ -351,7 +350,7 @@ def build_trade_plan(
 
     return plan
 
-# ---------- PyPortfolioOpt → SciPy → NumPy fallback ----------
+
 
 def run_pypfopt_max_sharpe(tickers, start_date, end_date):
     """
@@ -365,13 +364,15 @@ def run_pypfopt_max_sharpe(tickers, start_date, end_date):
     if prices.empty:
         raise ValueError("No price data for the given tickers/dates.")
 
-    # ---------- Try PyPortfolioOpt ----------
+    
     try:
-        from pypfopt import expected_returns, risk_models
-        from pypfopt.efficient_frontier import EfficientFrontier
+        
+        expected_returns = import_module("pypfopt.expected_returns")
+        risk_models = import_module("pypfopt.risk_models")
+        EfficientFrontier = import_module("pypfopt.efficient_frontier").EfficientFrontier
 
-        mu = expected_returns.mean_historical_return(prices)       # annualized mean returns
-        S = risk_models.CovarianceShrinkage(prices).ledoit_wolf()  # robust covariance
+        mu = expected_returns.mean_historical_return(prices)       
+        S = risk_models.CovarianceShrinkage(prices).ledoit_wolf()  
         ef = EfficientFrontier(mu, S)
         _ = ef.max_sharpe()
         cleaned = ef.clean_weights()
@@ -386,7 +387,7 @@ def run_pypfopt_max_sharpe(tickers, start_date, end_date):
     except Exception as e1:
         warnings.warn(f"PyPortfolioOpt unavailable or failed ({e1}); trying SciPy SLSQP fallback.")
 
-    # ---------- Try SciPy SLSQP (long-only, sum=1) ----------
+   
     try:
         import scipy.optimize as opt
 
@@ -414,7 +415,7 @@ def run_pypfopt_max_sharpe(tickers, start_date, end_date):
     except Exception as e2:
         warnings.warn(f"SciPy fallback failed ({e2}); using NumPy closed-form fallback.")
 
-    # ---------- Pure NumPy closed-form (Σ^{-1} μ) ----------
+    
     rets = prices.pct_change().dropna()
     mu = (rets.mean() * 252.0).values
     Sigma = (rets.cov() * 252.0).values
@@ -425,7 +426,7 @@ def run_pypfopt_max_sharpe(tickers, start_date, end_date):
     except Exception:
         w = np.ones(len(cols))
 
-    # Long-only projection + normalization
+    
     w = np.maximum(w, 0.0)
     s = w.sum()
     if s == 0:
@@ -445,7 +446,7 @@ def optimize_portfolio_with_finrl(json_path:str,
                                   portfolio_value: float | None = None,
                                   min_trade_dollars: float = 5.0,
                                   fractional_ok: bool = True):
-    # 0) universe from your JSON
+    #
     tickers, mv_map = load_tickers_from_portfolio_json(json_path, include_etfs=include_etfs)
     if not tickers:
         raise ValueError("No tickers found in portfolio.json")
@@ -455,7 +456,7 @@ def optimize_portfolio_with_finrl(json_path:str,
 
     sector_map = get_sector_map(tickers)
 
-    # Try FinRL first
+    
     if FINRL_AVAILABLE:
         try:
             allocation, df_account_value, df_actions = run_finrl_portfolio_optimization(
@@ -471,8 +472,7 @@ def optimize_portfolio_with_finrl(json_path:str,
     else:
         allocation, _, method = run_pypfopt_max_sharpe(tickers, start_date, end_date)
 
-    # --- Sector views ---
-    # Recommended (from allocation weights)
+    
     sector_alloc_pct = sector_breakdown_from_weights(allocation, sector_map)
     current_sector_pct = sector_breakdown_from_weights(mv_map or {}, sector_map) if mv_map else {}
 
@@ -481,17 +481,16 @@ def optimize_portfolio_with_finrl(json_path:str,
     missing_current = sorted(
         [s for s in GICS_SECTORS if current_sector_pct.get(s, 0) == 0]) if current_sector_pct else []
 
-    # --- NEW: compute portfolio value, dollar targets, and trade plan ---
-    # If not provided, use the sum of your current $ holdings from JSON; else default to 10k
+   
     pv_used = portfolio_value if isinstance(portfolio_value, (int, float)) else compute_portfolio_value(mv_map)
 
     dollar_targets = compute_dollar_targets(allocation, pv_used)
 
-    # Ensure we have current $ values for all names (0 if not held currently)
+   
     current_dollars = {t: float(mv_map.get(t, 0.0)) for t in allocation.keys()} if mv_map else {t: 0.0 for t in
                                                                                                 allocation.keys()}
 
-    # Fetch latest prices to estimate share quantities for the delta
+    
     last_prices = get_last_prices(list(allocation.keys()))
 
     trade_plan = build_trade_plan(
@@ -506,33 +505,33 @@ def optimize_portfolio_with_finrl(json_path:str,
     result = {
         "method": method,
         "tickers": tickers,
-        "final_allocation_weights": allocation,  # weights sum ≈ 1
-        "sector_allocation_percent": sector_alloc_pct,  # recommended sector %
-        "current_sector_allocation_percent": current_sector_pct,  # current sector %
+        "final_allocation_weights": allocation,  
+        "sector_allocation_percent": sector_alloc_pct,  
+        "current_sector_allocation_percent": current_sector_pct,  
         "missing_gics_sectors_recommended": missing_recommended,
         "underweighted_sectors_recommended": underweighted_recommended,
         "missing_gics_sectors_current": missing_current,
 
-        # --- NEW: dollar view + trade plan ---
+       
         "portfolio_value_used": round(pv_used, 2),
-        "dollar_targets": dollar_targets,  # $ target per ticker
+        "dollar_targets": dollar_targets,  
         "current_dollars": {k: round(v, 2) for k, v in current_dollars.items()},
-        "last_prices": last_prices,  # fetched quotes used for share calc
-        "trade_plan": trade_plan,  # per-ticker BUY/SELL/HOLD
+        "last_prices": last_prices,  
+        "trade_plan": trade_plan,  
     }
     return result
 
 
 if __name__ == "__main__":
 
-    json_path = "portfolio.json"
+    json_path = "C:/Users/adity/AI_Financial_Advisor/AI-Portfolio-Assistant/portfolio.json"
     out = optimize_portfolio_with_finrl(
-        "portfolio.json",
+        json_path=json_path,
         include_etfs=False,
         lookback_years=5,
         finrl_timesteps=25_000,
-        portfolio_value=None,  # or pass a number to override, e.g., 12543.27
-        min_trade_dollars=5.0,  # ignore tiny $ deltas
-        fractional_ok=True  # set False if your broker requires whole shares
+        portfolio_value=None,
+        min_trade_dollars=5.0,
+        fractional_ok=True
     )
     print(json.dumps(out, indent=2))

@@ -86,6 +86,44 @@
         <textarea id="input" rows="1" placeholder="Message AI Portfolio Assistant…"></textarea>
         <div class="actions">
           <button class="btn" type="button" id="clearBtn" title="Clear">Clear</button>
+            <button class="btn" type="button" id="uploadBtn" title="Upload File">Upload</button>
+            <input id="fileInput" type="file" accept=".txt,.md,.json,.csv,text/*" style="display:none" />
+
+            <script>
+            
+            const fileInput = document.getElementById('fileInput');
+            document.getElementById('uploadBtn').addEventListener('click', () => fileInput.click());
+
+            
+            fileInput.addEventListener('change', async (e) => {
+              const f = e.target.files?.[0];
+              if (!f) return;
+              
+              addMessage({ text: `Uploaded file: ${f.name}`, role: 'user' });
+
+              const reader = new FileReader();
+              reader.onload = async () => {
+              const content = String(reader.result || '');
+              
+              const bubble = addMessage({ text: '', role: 'assistant' });
+              try {
+                
+                await chatRequestStream(`File name: ${f.name}\n\n${content}`, (delta) => {
+                bubble.textContent += delta;
+                window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+                });
+              } catch (err) {
+                bubble.innerHTML = `<span class="muted">Error: ${err.message}</span>`;
+              }
+              };
+              reader.onerror = () => {
+              addMessage({ text: 'Could not read file', role: 'user' });
+              };
+              reader.readAsText(f);
+              
+              e.target.value = '';
+            });
+            </script>
           <button class="btn primary" type="submit" id="sendBtn" title="Send">Send</button>
         </div>
       </form>
@@ -121,13 +159,13 @@
       return bubble;
     }
 
-    // Minimal SSE parser for POST fetch streams (lines: "data: {...}\n\n")
+    
     function sseParser(onDelta, onDone, onError) {
       let buffer = '';
       return (chunk) => {
         buffer += chunk;
         const parts = buffer.split('\n\n');
-        buffer = parts.pop(); // keep last partial
+        buffer = parts.pop(); 
         for (const part of parts) {
           const line = part.trim();
           if (!line.startsWith('data:')) continue;
