@@ -18,7 +18,7 @@ def json_transform():
     chat = ChatOpenAI(model="gpt-4", temperature=0)
 
     json_prompt = f"""
-    You are a data transformation assistant helping convert a user's portfolio into a FinRL-compatible JSON format.
+    You are a data transformation assistant helping convert a user's portfolio into a FinRL-compatible JSON file.
     
     Given the following raw input:
     - A list of stock holdings with:
@@ -32,10 +32,7 @@ def json_transform():
     - date (use today’s date)
     - tic (the ticker symbol)
     - close (the price of one share)
-    - open (2% lower than close)
-    - high (2% higher than close)
-    - low (3% lower than close)
-    - volume (mocked as 1,000,000 for now)
+    - volume (How much quantity of the stock they own)
     
     With the following portfolio {portfolio}
     """

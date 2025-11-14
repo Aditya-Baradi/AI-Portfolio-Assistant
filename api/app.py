@@ -61,7 +61,7 @@ class ChatEngine:
 class OpenAIEngine(ChatEngine):
     """Uses OpenAI if OPENAI_API_KEY is set."""
     def __init__(self, model: Optional[str] = None):
-        from openai import OpenAI  # lazy import
+        from openai import OpenAI  
         self.client = OpenAI()
         self.model = model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
         self.name = f"openai:{self.model}"

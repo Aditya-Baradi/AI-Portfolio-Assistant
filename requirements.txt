@@ -1,4 +1,4 @@
-langchain-core~=0.3.71
+langchain-core~=1.0.4
 langchain-openai~=0.3.28
 python-dotenv~=1.1.1
 pdfplumber~=0.11.7
@@ -10,3 +10,8 @@ flask>=3.0.0
 flask-cors>=4.0.0
 python-dotenv>=1.0.1
 openai>=1.40.0
+mcp>=1.21.0
+finrl>=0.3.7
+PyPortfolioOpt>=1.5.4
+requests>=2.31.0
+scikit-learn>=1.4.2
