@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>AI Portfolio Assistant</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #020617;
+      color: #e5e7eb;
+      margin: 0;
+      display: flex;
+      justify-content: center;
+      padding: 24px;
+    }
+    .app {
+      width: 100%;
+      max-width: 900px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+    }
+    .title {
+      font-size: 1.4rem;
+      font-weight: 600;
+    }
+    .subtitle {
+      font-size: 0.9rem;
+      color: #9ca3af;
+    }
+    .session-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-top: 4px;
+      font-size: 0.9rem;
+    }
+    .session-row input {
+      flex: 1;
+      padding: 6px 8px;
+      border-radius: 6px;
+      border: 1px solid #4b5563;
+      background: #020617;
+      color: #e5e7eb;
+    }
+    .chat-window {
+      flex: 1;
+      min-height: 400px;
+      max-height: 70vh;
+      overflow-y: auto;
+      border-radius: 12px;
+      border: 1px solid #1f2933;
+      padding: 12px;
+      background: radial-gradient(circle at top left, #111827, #020617);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .msg {
+      max-width: 80%;
+      padding: 8px 12px;
+      border-radius: 12px;
+      font-size: 0.95rem;
+      white-space: pre-wrap;
+    }
+    .msg.user {
+      margin-left: auto;
+      background: #1d4ed8;
+    }
+    .msg.assistant {
+      margin-right: auto;
+      background: #111827;
+      border: 1px solid #1f2937;
+    }
+    .input-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .input-row textarea {
+      flex: 1;
+      resize: none;
+      min-height: 40px;
+      max-height: 120px;
+      border-radius: 8px;
+      border: 1px solid #4b5563;
+      padding: 8px;
+      background: #020617;
+      color: #e5e7eb;
+      font-family: inherit;
+      font-size: 0.95rem;
+    }
+    .input-row button {
+      padding: 0 16px;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      font-weight: 500;
+      background: #22c55e;
+      color: #020617;
+    }
+    .input-row button:disabled {
+      opacity: 0.6;
+      cursor: default;
+    }
+    .status {
+      font-size: 0.8rem;
+      color: #9ca3af;
+      min-height: 1em;
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="header">
+      <div>
+        <div class="title">AI Portfolio Assistant</div>
+        <div class="subtitle">
+          Ask about allocation, risk, backtests, or your holdings.
+          Educational only — not investment advice.
+        </div>
+        <div class="session-row">
+          <span>Session ID:</span>
+          <input id="sessionId" type="text" placeholder="e.g., your email or nickname" />
+        </div>
+      </div>
+    </div>
+
+    <div id="chatWindow" class="chat-window"></div>
+
+    <div class="status" id="status"></div>
+
+    <div class="input-row">
+
+      
+      <input 
+        type="file"
+        id="fileInput"
+        class="file-input"
+      />
+      <button id="uploadBtn" type="button" class="send-btn">
+        Upload File
+      </button>
+
+      
+      <textarea id="messageInput" placeholder="Ask a question about your portfolio..."></textarea>
+
+      
+      <button id="sendBtn" type="button" class="send-btn">
+        Send
+      </button>
+
+    </div>
+
+
+  
+<script>
+  const API_URL = "http://127.0.0.1:8000/chat";
+  const UPLOAD_URL = "http://127.0.0.1:8000/upload";
+
+  const chatWindow = document.getElementById("chatWindow");
+  const messageInput = document.getElementById("messageInput");
+  const sendBtn = document.getElementById("sendBtn");
+  const statusEl = document.getElementById("status");
+  const sessionInput = document.getElementById("sessionId");
+
+  const fileInput = document.getElementById("fileInput");
+  const uploadBtn = document.getElementById("uploadBtn");
+
+  const savedSessionId = localStorage.getItem("sessionId");
+  if (savedSessionId) {
+    sessionInput.value = savedSessionId;
+  }
+
+  const savedChatHtml = localStorage.getItem("chatHtml");
+  if (savedChatHtml) {
+    chatWindow.innerHTML = savedChatHtml;
+  }
+
+  sessionInput.addEventListener("input", () => {
+    localStorage.setItem("sessionId", sessionInput.value);
+  });
+
+  function addMessage(role, text) {
+    const div = document.createElement("div");
+    div.className = "msg " + role;
+    div.textContent = text;
+    chatWindow.appendChild(div);
+    chatWindow.scrollTop = chatWindow.scrollHeight;
+
+    localStorage.setItem("chatHtml", chatWindow.innerHTML);
+  }
+
+  async function sendMessage() {
+    const text = messageInput.value.trim();
+    const sessionId = sessionInput.value.trim() || "anonymous";
+    if (!text) return;
+
+    messageInput.value = "";
+    addMessage("user", text);
+
+    sendBtn.disabled = true;
+    statusEl.textContent = "Talking to backend…";
+
+    try {
+      const res = await fetch(API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: text,
+          session_id: sessionId,
+        }),
+      });
+
+      if (!res.ok) {
+        addMessage(
+          "assistant",
+          `Backend error: ${res.status} ${res.statusText} (is FastAPI running on http://127.0.0.1:8000?)`
+        );
+        statusEl.textContent = "";
+        sendBtn.disabled = false;
+        return;
+      }
+
+      const data = await res.json();
+      addMessage("assistant", data.answer || "[empty response]");
+      statusEl.textContent = "";
+    } catch (err) {
+      console.error(err);
+      addMessage(
+        "assistant",
+        "Network error talking to backend. Make sure FastAPI is running on http://127.0.0.1:8000 and CORS is enabled."
+      );
+      statusEl.textContent = "";
+    } finally {
+      sendBtn.disabled = false;
+    }
+  }
+
+  async function uploadFile() {
+    const sessionId = sessionInput.value.trim() || "anonymous";
+    const file = fileInput.files[0];
+
+    if (!file) {
+      addMessage("assistant", "Please choose a file first.");
+      return;
+    }
+
+    addMessage("user", `Uploading file: ${file.name}`);
+    uploadBtn.disabled = true;
+    statusEl.textContent = "Uploading…";
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("session_id", sessionId);
+
+      const res = await fetch(UPLOAD_URL, {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await res.json();
+      addMessage("assistant", data.message || "File received.");
+    } catch (err) {
+      console.error(err);
+      addMessage(
+        "assistant",
+        "Upload failed. Is the backend /upload endpoint running on http://127.0.0.1:8000?"
+      );
+    } finally {
+      uploadBtn.disabled = false;
+      statusEl.textContent = "";
+    }
+  }
+
+  sendBtn.addEventListener("click", sendMessage);
+  uploadBtn.addEventListener("click", uploadFile);
+
+  messageInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  });
+</script>
+
+</body>
+</html>

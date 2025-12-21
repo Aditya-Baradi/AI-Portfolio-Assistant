@@ -1,5 +1,56 @@
-venv/
-.env/
-.python-version
+# =========================
+# Python
+# =========================
 __pycache__/
-*.pyc
+*.py[cod]
+*.pyo
+*.pyd
+
+# =========================
+# Virtual Environments
+# =========================
+.venv/
+venv/
+ENV/
+env/
+
+# =========================
+# VS Code
+# =========================
+.vscode/
+*.code-workspace
+
+# =========================
+# OS files
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# Logs / runtime
+# =========================
+*.log
+
+# =========================
+# Secrets / local configs
+# =========================
+.env
+api/.env
+
+# =========================
+# Generated / runtime data
+# =========================
+chat_memory/
+portfolio.json
+
+# =========================
+# Node / frontend (if used later)
+# =========================
+node_modules/
+dist/
+build/
+
+# =========================
+# Jupyter (if used)
+# =========================
+.ipynb_checkpoints/
