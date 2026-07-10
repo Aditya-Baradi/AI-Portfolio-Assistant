@@ -5,13 +5,45 @@ import numpy as np
 import pandas as pd
 from langchain.tools import tool
 
+from pathlib import Path
+
+
 from .portfolio_core import (
     SESSION_PORTFOLIOS,
+    get_session_portfolio,
     load_price_history,
     recommend_portfolio,
     load_price_on_date,
     compute_metrics_from_holdings,
+    backtest_vs_benchmark,
+    backtest_sectors_vs_benchmark,
 )
+from .sentiment import (
+    analyze_ticker_sentiment,
+    analyze_portfolio_sentiment,
+    apply_sentiment_tilt,
+)
+
+
+def _session_weights(session_id: str) -> dict:
+    """Ticker -> dollar value from the session's uploaded holdings ({} if none)."""
+    pf = get_session_portfolio(session_id)
+    if not pf:
+        return {}
+    holdings = pf.get("holdings", []) if isinstance(pf, dict) else pf
+    weights: dict = {}
+    for h in holdings if isinstance(holdings, list) else []:
+        if not isinstance(h, dict):
+            continue
+        tkr = h.get("ticker") or h.get("symbol") or h.get("tic")
+        if not tkr:
+            continue
+        val = h.get("current_dollars") or h.get("total_value") or h.get("value") or 0.0
+        try:
+            weights[str(tkr).upper()] = weights.get(str(tkr).upper(), 0.0) + float(val)
+        except Exception:
+            continue
+    return {t: v for t, v in weights.items() if v > 0}
 
 @tool
 def lc_compute_metrics_from_portfolio(holdings_json: str, start: str, end: str) -> str:
@@ -160,7 +192,7 @@ def lc_get_portfolio_holdings(session_id: str) -> str:
     """
     Return the uploaded holdings for this session as pretty-printed JSON for debugging.
     """
-    pf = SESSION_PORTFOLIOS.get(session_id)
+    pf = get_session_portfolio(session_id)
     if not pf:
         return "No portfolio uploaded for this session."
     return json.dumps(pf, indent=2)
@@ -179,7 +211,7 @@ def load_user_portfolio(session_id: str) -> str:
     Output (on failure):
       JSON: {"error": "..."}
     """
-    pf = SESSION_PORTFOLIOS.get(session_id)
+    pf = get_session_portfolio(session_id)
     if not pf:
         return json.dumps(
             {"error": f"No portfolio found for session '{session_id}'. Please upload a portfolio file first."}
@@ -268,3 +300,243 @@ def compute_total_value(holdings_json: str) -> str:
                 pass
 
     return json.dumps({"total_value": round(total, 2)})
+
+@tool("portfolio_holdings_count")
+def portfolio_holdings_count(session_id: str) -> str:
+    """
+    Return the exact number of holdings rows stored for a session_id.
+    Output: JSON {"count": int}
+    """
+    pf = get_session_portfolio(session_id)
+    if not pf:
+        return json.dumps({"error": f"No portfolio found for session '{session_id}'."})
+
+    if isinstance(pf, dict):
+        holdings = pf.get("holdings", [])
+    else:
+        holdings = pf
+
+    return json.dumps({"count": len(holdings)})
+
+@tool("lc_ticker_sentiment")
+def lc_ticker_sentiment(ticker: str, limit: int = 8) -> str:
+    """
+    Analyze recent financial-news sentiment for a single stock ticker.
+
+    Pulls recent headlines (Yahoo Finance and its news providers) and scores
+    them as Bullish / Neutral / Bearish.
+
+    Input:
+      - ticker: stock symbol (e.g. "NVDA")
+      - limit: max number of headlines to analyze (default 8)
+
+    Output (JSON):
+      {ticker, avg_score (-1..1), label, counts, n_headlines, headlines:[{title, score, label, publisher, url}]}
+    """
+    try:
+        result = analyze_ticker_sentiment(ticker, limit=int(limit))
+        # Trim headline payload so the model isn't flooded with raw text.
+        result["headlines"] = [
+            {k: h[k] for k in ("title", "score", "label", "publisher") if k in h}
+            for h in result.get("headlines", [])[:limit]
+        ]
+        return json.dumps(result)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+@tool("lc_portfolio_sentiment")
+def lc_portfolio_sentiment(session_id: str, limit_per_ticker: int = 5) -> str:
+    """
+    Analyze news sentiment across the user's uploaded portfolio.
+
+    Loads the holdings for this session, scores recent news for each holding,
+    and returns a dollar-weighted overall sentiment plus the most bullish and
+    most bearish names.
+
+    Input:
+      - session_id: the active chat session identifier
+      - limit_per_ticker: headlines to score per holding (default 5)
+
+    Output (JSON):
+      {portfolio_sentiment_score, portfolio_label, most_bullish, most_bearish, per_ticker}
+    """
+    weights = _session_weights(session_id)
+    if not weights:
+        return json.dumps({"error": f"No portfolio with usable holdings found for session '{session_id}'. Upload a portfolio first."})
+
+    try:
+        result = analyze_portfolio_sentiment(weights, limit_per_ticker=int(limit_per_ticker))
+        return json.dumps(result)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+@tool("lc_backtest_portfolio")
+def lc_backtest_portfolio(session_id: str, start: str = "", end: str = "") -> str:
+    """
+    Backtest the user's uploaded portfolio against the S&P 500 (SPY), at both
+    the stock level and the sector level, and render an equity-curve chart.
+
+    Includes realistic assumptions: transaction costs and a risk-free rate in
+    Sharpe ratios.
+
+    Input:
+      - session_id: the active chat session identifier
+      - start, end: optional YYYY-MM-DD dates (default: the last 12 months)
+
+    Output (JSON): {stocks: {...}, sectors: {...}, chart_url}
+      Each block has portfolio metrics, benchmark metrics, and a comparison
+      (excess return, alpha, beta, information ratio, outperformed).
+      chart_url is a path like /charts/x.png — include it verbatim in your answer.
+    """
+    from datetime import datetime, timedelta
+
+    weights = _session_weights(session_id)
+    if not weights:
+        return json.dumps({"error": f"No portfolio with usable holdings found for session '{session_id}'. Upload a portfolio first."})
+
+    if not end:
+        end = datetime.today().strftime("%Y-%m-%d")
+    if not start:
+        start = (datetime.today() - timedelta(days=365)).strftime("%Y-%m-%d")
+
+    try:
+        stocks = backtest_vs_benchmark(weights, start, end, return_curves=True)
+    except Exception as e:
+        return json.dumps({"error": f"Stock-level backtest failed: {e}"})
+
+    chart_url = None
+    curves = stocks.pop("curves", None)
+    if curves:
+        try:
+            from .charting import equity_curve_png
+
+            chart_url = equity_curve_png(
+                curves["dates"], curves["portfolio"], curves["benchmark"]
+            )
+        except Exception:
+            chart_url = None  # chart is a bonus; the numbers still stand
+
+    try:
+        sectors = backtest_sectors_vs_benchmark(weights, start, end)
+        # Curves/headline detail aren't needed twice; keep the sector block lean.
+        sectors = {
+            "sector_weights": sectors.get("sector_weights"),
+            "sector_etf_weights": sectors.get("sector_etf_weights"),
+            "portfolio": sectors.get("portfolio"),
+            "comparison": sectors.get("comparison"),
+        }
+    except Exception as e:
+        sectors = {"error": f"Sector-level backtest failed: {e}"}
+
+    return json.dumps({"stocks": stocks, "sectors": sectors, "chart_url": chart_url})
+
+
+@tool("lc_sentiment_tilt")
+def lc_sentiment_tilt(weights_json: str, strength: float = 0.2) -> str:
+    """
+    Adjust a {ticker: weight} allocation using current news sentiment.
+
+    Each weight is scaled by (1 + strength * sentiment_score) and renormalized,
+    so bullish names are overweighted and bearish names underweighted. Use after
+    an optimization when the user wants news factored into the recommendation.
+
+    Input:
+      - weights_json: JSON object mapping ticker -> weight
+      - strength: max relative adjustment (0..1, default 0.2 = +/-20%)
+
+    Output (JSON): {weights, sentiment (per-ticker scores), strength}
+    """
+    try:
+        weights = json.loads(weights_json)
+        if not isinstance(weights, dict) or not weights:
+            return json.dumps({"error": "weights_json must be a non-empty JSON object of ticker -> weight."})
+    except Exception as e:
+        return json.dumps({"error": f"Invalid weights_json: {e}"})
+
+    try:
+        return json.dumps(apply_sentiment_tilt(weights, strength=float(strength)))
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+@tool("finrl_optimize_portfolio")
+def finrl_optimize_portfolio(session_id: str) -> str:
+    """
+    Run FinRL-based portfolio optimization on the user's uploaded portfolio.
+
+    Input:
+      - session_id: the active chat session identifier
+
+    Output:
+      - text containing optimized portfolio weights, sector breakdown,
+        dollar targets, and trade plan
+    """
+
+    pf = get_session_portfolio(session_id)
+    if not pf:
+        return json.dumps({"error": f"No portfolio found for session '{session_id}'. Upload a portfolio first."})
+
+    if isinstance(pf, dict):
+        holdings = pf.get("holdings", [])
+    else:
+        holdings = pf
+
+    if not isinstance(holdings, list) or not holdings:
+        return json.dumps({"error": "Portfolio is present but empty or in an unexpected format."})
+
+    mem_dir = Path("chat_memory")
+    mem_dir.mkdir(exist_ok=True)
+
+    json_path = mem_dir / f"{session_id}.finrl_input.json"
+    try:
+        json_path.write_text(json.dumps(holdings, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        return json.dumps({"error": f"Failed to write portfolio file: {e}"})
+
+    try:
+        # Import here to avoid import-time issues
+        from api.predict_agent import optimize_portfolio_with_finrl
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+
+        executor = ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(
+            optimize_portfolio_with_finrl,
+            json_path=str(json_path),
+            include_etfs=False,
+            lookback_years=5,
+            finrl_timesteps=5000,
+            portfolio_value=None,
+            min_trade_dollars=5.0,
+            fractional_ok=True,
+        )
+
+        try:
+            result = future.result(timeout=180)
+            return json.dumps(result, ensure_ascii=False)
+        except FutureTimeoutError:
+            # Don't leave the user empty-handed: fall back to the fast
+            # max-Sharpe optimizer over the same tickers.
+            try:
+                from datetime import datetime, timedelta
+                from api.predict_agent import run_pypfopt_max_sharpe, load_tickers_from_portfolio_json
+
+                tickers, _ = load_tickers_from_portfolio_json(str(json_path), include_etfs=False)
+                end = datetime.today().strftime("%Y-%m-%d")
+                start = (datetime.today() - timedelta(days=365 * 3)).strftime("%Y-%m-%d")
+                alloc, _, method = run_pypfopt_max_sharpe(tickers, start, end)
+                return json.dumps({
+                    "method": f"{method} (RL timed out; max-Sharpe fallback)",
+                    "final_allocation_weights": alloc,
+                    "note": "The RL optimization exceeded 180s; these weights come from the max-Sharpe optimizer instead.",
+                })
+            except Exception as e2:
+                return json.dumps({"error": f"Optimization timed out and the fallback also failed: {e2}"})
+        finally:
+            executor.shutdown(wait=False)
+
+    except ImportError as e:
+        return json.dumps({"error": f"Failed to import optimization module: {e}"})
+    except Exception as e:
+        return json.dumps({"error": f"Optimization failed: {str(e)}"})

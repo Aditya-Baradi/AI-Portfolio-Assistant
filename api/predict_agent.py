@@ -3,10 +3,16 @@ import json
 import warnings
 from datetime import datetime, timedelta
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 
 import numpy as np
 import pandas as pd
 import yfinance as yf
+
+try:
+    from .data_cache import cached_download, cached_sectors
+except ImportError:  # running as a plain script
+    from api.data_cache import cached_download, cached_sectors
 
 
 
@@ -28,17 +34,20 @@ try:
 
     StockPortfolioEnv = None
     for mod in (
-        "finrl.meta.env_portfolio.env_portfolio",  
-        "finrl.env.env_portfolio",                 
+        "finrl.meta.env_portfolio_allocation.env_portfolio",  # FinRL >=0.3.6 layout
+        "finrl.meta.env_portfolio.env_portfolio",
+        "finrl.env.env_portfolio",
     ):
         try:
             StockPortfolioEnv = getattr(import_module(mod), "StockPortfolioEnv")
             break
-        except ModuleNotFoundError:
+        except (ModuleNotFoundError, ImportError):
             pass
 
     if StockPortfolioEnv is None:
         raise ModuleNotFoundError("StockPortfolioEnv not found in known locations.")
+
+    data_split = import_module("finrl.meta.preprocessor.preprocessors").data_split
 
     FINRL_AVAILABLE = True
 
@@ -105,20 +114,9 @@ def load_tickers_from_portfolio_json(json_path, include_etfs=False):
 
 
 def get_sector_map(tickers):
-    """Map each ticker to a normalized GICS sector."""
-    sector_map = {}
-    for t in tickers:
-        try:
-            yft = yf.Ticker(t)
-            try:
-                info = yft.get_info()
-            except Exception:
-                info = yft.info
-            raw = info.get("sector") or "Unknown"
-        except Exception:
-            raw = "Unknown"
-        sector_map[t] = SECTOR_NORMALIZE.get(raw, raw)
-    return sector_map
+    """Map each ticker to a normalized GICS sector (disk-cached)."""
+    raw_map = cached_sectors(tickers)
+    return {t: SECTOR_NORMALIZE.get(raw, raw) for t, raw in raw_map.items()}
 
 
 def sector_breakdown_from_weights(weights, sector_map):
@@ -142,7 +140,7 @@ def _download_price_matrix(tickers, start_date, end_date):
     Robustly fetch a 2D DataFrame of adjusted close prices (rows = dates, cols = tickers).
     Tries auto_adjust=True first (so 'Close' is adjusted), then falls back to Adj Close.
     """
-    df = yf.download(tickers, start=start_date, end=end_date, auto_adjust=True, progress=False)
+    df = cached_download(tickers, start=start_date, end=end_date, auto_adjust=True, progress=False)
     if df is None or df.empty:
         raise ValueError("No price data returned by yfinance.")
 
@@ -183,6 +181,68 @@ def _download_price_matrix(tickers, start_date, end_date):
 
 
 
+def _build_finrl_dataframe(tickers, start_date, end_date, techs):
+    """
+    Build a clean, rectangular FinRL-style long dataframe (date, tic, OHLCV +
+    technical indicators) directly from yfinance + stockstats.
+
+    FinRL 0.3.7's bundled YahooFinanceProcessor is broken against modern
+    yfinance (it silently drops all but the first ticker), so we do the
+    download/indicator work ourselves and keep only dates present for every
+    surviving ticker so the env sees perfectly rectangular data.
+    """
+    from stockstats import StockDataFrame
+
+    raw = cached_download(
+        tickers, start=start_date, end=end_date,
+        auto_adjust=True, progress=False, group_by="ticker",
+    )
+    if raw is None or raw.empty:
+        raise ValueError("No price data returned by yfinance for the FinRL dataframe.")
+
+    frames = []
+    for t in tickers:
+        try:
+            sub = raw[t].copy() if isinstance(raw.columns, pd.MultiIndex) else raw.copy()
+        except KeyError:
+            continue
+        sub = sub.rename(columns=str.lower)
+        needed = ["open", "high", "low", "close", "volume"]
+        if not set(needed).issubset(sub.columns):
+            continue
+        sub = sub[needed].dropna(how="any")
+        if sub.empty:
+            continue
+        sub["tic"] = t
+        sub["date"] = pd.to_datetime(sub.index).strftime("%Y-%m-%d")
+        frames.append(sub.reset_index(drop=True))
+
+    if len(frames) < 2:
+        raise ValueError(f"Need >=2 tickers with usable data; got {len(frames)}.")
+
+    df = pd.concat(frames, ignore_index=True)
+
+    # Keep only dates where every surviving ticker is present (rectangular).
+    n_tics = df["tic"].nunique()
+    counts = df.groupby("date")["tic"].nunique()
+    full_dates = set(counts[counts == n_tics].index)
+    df = df[df["date"].isin(full_dates)].copy()
+    if df.empty:
+        raise ValueError("No common trading dates across tickers after alignment.")
+
+    # Technical indicators per ticker via stockstats.
+    out = []
+    for t, d in df.groupby("tic"):
+        d = d.sort_values("date").reset_index(drop=True)
+        sdf = StockDataFrame.retype(d.copy())
+        for ind in techs:
+            d[ind] = pd.Series(sdf[ind].values).fillna(0.0).values
+        out.append(d)
+    df = pd.concat(out, ignore_index=True)
+    df = df.sort_values(["date", "tic"], ignore_index=True)
+    return df
+
+
 def run_finrl_portfolio_optimization(tickers, start_date, end_date, timesteps=50_000):
     """
     Train a PPO agent in FinRL's StockPortfolioEnv and return final action weights (allocation) and logs.
@@ -190,27 +250,61 @@ def run_finrl_portfolio_optimization(tickers, start_date, end_date, timesteps=50
     if not FINRL_AVAILABLE:
         raise ImportError("FinRL not installed/available")
 
-    
-    dp = DataProcessor(data_source="yahoofinance",
-                       start_date=start_date, end_date=end_date, time_interval="1D")
-    dp.download_data(ticker_list=tickers)
-    dp.clean_data()
-    techs = ["macd", "rsi_30", "cci_30", "dx_30"]  
-    dp.add_technical_indicator(tech_indicator_list=techs)
+    # FinRL's StockPortfolioEnv writes reward plots to ./results on the final
+    # step; ensure the directory exists and use a headless matplotlib backend.
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+    except Exception:
+        pass
+    os.makedirs("results", exist_ok=True)
 
-    data = dp.dataframe  
-    if not isinstance(data, pd.DataFrame) or data.empty:
-        raise ValueError("No data returned by DataProcessor")
+    techs = ["macd", "rsi_30", "cci_30", "dx_30"]
+    data = _build_finrl_dataframe(tickers, start_date, end_date, techs)
 
-   
-    split_date = (pd.to_datetime(start_date) + pd.Timedelta(days=int((pd.to_datetime(end_date) - pd.to_datetime(start_date)).days * 0.8))).strftime("%Y-%m-%d")
-    train = data[data.date < split_date]
-    trade = data[data.date >= split_date]
+    # Only the tickers that actually survived data cleaning participate.
+    tickers = sorted(data["tic"].unique())
+
+    # The portfolio-allocation env consumes a per-day covariance matrix
+    # ('cov_list') plus the technical indicators. Build a rolling covariance
+    # feature the way the canonical FinRL portfolio tutorial does.
+    lookback = 60
+    unique_dates = data["date"].unique()
+    if len(unique_dates) <= lookback + 5:
+        raise ValueError(
+            f"Not enough trading days ({len(unique_dates)}) for lookback={lookback}; widen the date range."
+        )
+
+    data.index = data["date"].factorize()[0]
+    cov_list, return_list = [], []
+    for i in range(lookback, len(unique_dates)):
+        window = data.loc[i - lookback : i, :]
+        price = window.pivot_table(index="date", columns="tic", values="close")
+        rets = price.pct_change().dropna()
+        return_list.append(rets)
+        cov_list.append(rets.cov().values)
+
+    df_cov = pd.DataFrame(
+        {"date": unique_dates[lookback:], "cov_list": cov_list, "return_list": return_list}
+    )
+    data = data.merge(df_cov, on="date")
+    data = data.sort_values(["date", "tic"], ignore_index=True)
+    data.index = data["date"].factorize()[0]
+
+    # Train / trade split (data_split re-factorizes the day index correctly).
+    split_date = (
+        pd.to_datetime(start_date)
+        + pd.Timedelta(days=int((pd.to_datetime(end_date) - pd.to_datetime(start_date)).days * 0.8))
+    ).strftime("%Y-%m-%d")
+    train = data_split(data, unique_dates[lookback], split_date)
+    trade = data_split(data, split_date, unique_dates[-1])
     if train.empty or trade.empty:
         raise ValueError("Train/test split produced empty sets; adjust dates.")
 
     stock_dim = len(tickers)
-    state_space = 1 + 2 * stock_dim + len(techs) * stock_dim
+    # For the portfolio env the state is the (stock_dim x stock_dim) covariance
+    # matrix stacked with the indicators, so state_space == stock_dim.
+    state_space = stock_dim
 
     env_kwargs = dict(
         hmax=100,
@@ -226,26 +320,26 @@ def run_finrl_portfolio_optimization(tickers, start_date, end_date, timesteps=50
     env_train = StockPortfolioEnv(df=train, **env_kwargs)
     env_trade = StockPortfolioEnv(df=trade, **env_kwargs)
 
-   
     agent = DRLAgent(env=env_train)
     model = agent.get_model("ppo", policy="MlpPolicy")
-    trained = agent.train_model(model=model, total_timesteps=timesteps)
+    trained = agent.train_model(model=model, tb_log_name="ppo", total_timesteps=timesteps)
 
-    
-    df_account_value, df_actions = agent.DRL_prediction(model=trained, environment=env_trade)
+    # For the portfolio env, DRL_prediction returns (daily_return_df, actions_df),
+    # where each actions row is the softmaxed weight vector over tickers.
+    df_daily_return, df_actions = agent.DRL_prediction(model=trained, environment=env_trade)
 
-    
-    if list(df_actions.columns) == tickers:
-        allocation = {t: float(df_actions.iloc[-1][t]) for t in tickers}
+    tics = list(df_actions.columns)
+    last = df_actions.iloc[-1]
+    if set(tics) >= set(tickers):
+        allocation = {t: float(last[t]) for t in tickers}
     else:
-        allocation = {tickers[i]: float(df_actions.iloc[-1, i]) for i in range(len(tickers))}
+        allocation = {tickers[i]: float(last.iloc[i]) for i in range(len(tickers))}
 
-    
     s = sum(abs(w) for w in allocation.values())
     if s > 0:
         allocation = {t: round(abs(w) / s, 6) for t, w in allocation.items()}
 
-    return allocation, df_account_value, df_actions
+    return allocation, df_daily_return, df_actions
 
 from math import floor
 
@@ -439,13 +533,99 @@ def run_pypfopt_max_sharpe(tickers, start_date, end_date):
 
 
 
+def _blend_allocations(rl: dict, ms: dict, rl_weight: float) -> dict:
+    """
+    Convex-combine two allocation dicts: rl_weight*RL + (1-rl_weight)*max-Sharpe.
+
+    Keys present in only one side are treated as 0 in the other. The result is
+    renormalized to sum to 1. This keeps the RL-learned tilt while anchoring the
+    per-stock weights to the (fast, differentiated) mean-variance solution.
+    """
+    keys = set(rl) | set(ms)
+    combined = {k: rl_weight * float(rl.get(k, 0.0)) + (1.0 - rl_weight) * float(ms.get(k, 0.0)) for k in keys}
+    s = sum(combined.values())
+    if s <= 0:
+        return {k: round(v, 6) for k, v in combined.items()}
+    return {k: round(v / s, 6) for k, v in combined.items()}
+
+
+def run_min_vol_capped(tickers, start_date, end_date, max_weight: float = 0.15):
+    """
+    Minimum-volatility optimization with a per-name weight cap.
+
+    Rationale (validated out-of-sample in api/backtest_vs_sp500.py's walk-forward):
+    expected returns estimated from history are mostly noise, and max-Sharpe
+    loads up on that noise. Min-vol uses only the covariance matrix (the
+    estimable input) and the weight cap acts as regularization, preventing
+    30-45% single-name bets.
+
+    Returns (weights_dict, prices_df, method_str).
+    """
+    prices = _download_price_matrix(tickers, start_date, end_date)
+    prices = prices.dropna(axis=0, how="all").dropna(axis=1, how="any")
+    if prices.empty:
+        raise ValueError("No price data for the given tickers/dates.")
+    n = len(prices.columns)
+    # A cap below 1/n is infeasible; relax it if the universe is small.
+    max_weight = max(float(max_weight), 1.05 / n)
+
+    try:
+        risk_models = import_module("pypfopt.risk_models")
+        EfficientFrontier = import_module("pypfopt.efficient_frontier").EfficientFrontier
+
+        S = risk_models.CovarianceShrinkage(prices).ledoit_wolf()
+        ef = EfficientFrontier(None, S, weight_bounds=(0.0, max_weight))
+        ef.min_volatility()
+        cleaned = {t: w for t, w in ef.clean_weights().items() if w > 0}
+        total = sum(cleaned.values())
+        if total <= 0:
+            raise ValueError("min_volatility returned zero weights.")
+        return {t: round(w / total, 6) for t, w in cleaned.items()}, prices, "minvol-capped"
+
+    except Exception as e1:
+        warnings.warn(f"PyPortfolioOpt min-vol failed ({e1}); using SciPy fallback.")
+
+    import scipy.optimize as opt
+
+    rets = prices.pct_change().dropna()
+    Sigma = (rets.cov() * 252.0).values
+    cols = prices.columns.tolist()
+
+    def variance(w):
+        return w @ Sigma @ w
+
+    cons = ({"type": "eq", "fun": lambda w: np.sum(w) - 1.0},)
+    bounds = [(0.0, max_weight)] * n
+    w0 = np.ones(n) / n
+    res = opt.minimize(variance, w0, method="SLSQP", bounds=bounds, constraints=cons,
+                       options={"maxiter": 500})
+    w = res.x if res.success else w0
+    return {cols[i]: round(float(w[i]), 6) for i in range(n)}, prices, "minvol-scipy"
+
+
+def run_conservative_optimization(tickers, start_date, end_date,
+                                  max_weight: float = 0.15,
+                                  eq_blend: float = 0.5):
+    """
+    The evidence-backed allocation used for recommendations and walk-forward:
+    min-vol with a weight cap, then blended eq_blend toward equal weight
+    (shrinkage toward 1/N, which is very hard to beat out-of-sample).
+    """
+    opt_w, prices, method = run_min_vol_capped(tickers, start_date, end_date, max_weight)
+    cols = list(prices.columns)
+    eq_w = {t: 1.0 / len(cols) for t in cols}
+    blended = _blend_allocations(opt_w, eq_w, 1.0 - eq_blend)
+    return blended, prices, f"{method}+eq(1/N={eq_blend:.0%})"
+
+
 def optimize_portfolio_with_finrl(json_path:str,
                                   include_etfs=False,
                                   lookback_years=5,
                                   finrl_timesteps=50_000,
                                   portfolio_value: float | None = None,
                                   min_trade_dollars: float = 5.0,
-                                  fractional_ok: bool = True):
+                                  fractional_ok: bool = True,
+                                  blend_rl_weight: float = 0.5):
     #
     tickers, mv_map = load_tickers_from_portfolio_json(json_path, include_etfs=include_etfs)
     if not tickers:
@@ -456,21 +636,43 @@ def optimize_portfolio_with_finrl(json_path:str,
 
     sector_map = get_sector_map(tickers)
 
-    
+    # Always compute the fast anchor first (cheap). Conservative (min-vol +
+    # weight cap + 1/N shrinkage) — it beat max-Sharpe decisively in the
+    # out-of-sample walk-forward test.
+    ms_alloc = None
+    try:
+        ms_alloc, _, anchor_method = run_conservative_optimization(tickers, start_date, end_date)
+    except Exception as e:
+        warnings.warn(f"Conservative anchor failed ({e}); trying max-Sharpe.")
+        try:
+            ms_alloc, _, anchor_method = run_pypfopt_max_sharpe(tickers, start_date, end_date)
+        except Exception as e2:
+            warnings.warn(f"max-Sharpe anchor failed ({e2}).")
+
+    allocation, method = None, None
     if FINRL_AVAILABLE:
         try:
-            allocation, df_account_value, df_actions = run_finrl_portfolio_optimization(
+            rl_alloc, df_account_value, df_actions = run_finrl_portfolio_optimization(
                 tickers=tickers,
                 start_date=start_date,
                 end_date=end_date,
-                timesteps=finrl_timesteps
+                timesteps=finrl_timesteps,
             )
-            method = "finrl"
+            if ms_alloc:
+                # Blend the RL tilt with the conservative anchor so individual
+                # stocks differentiate reliably (not just near equal-weight).
+                allocation = _blend_allocations(rl_alloc, ms_alloc, blend_rl_weight)
+                method = f"finrl+{anchor_method}(rl={blend_rl_weight:.2f})"
+            else:
+                allocation, method = rl_alloc, "finrl"
         except Exception as e:
-            warnings.warn(f"FinRL failed ({e}); falling back to max-Sharpe.")
+            warnings.warn(f"FinRL failed ({e}); falling back to the anchor optimizer.")
+
+    if allocation is None:
+        if ms_alloc:
+            allocation, method = ms_alloc, anchor_method
+        else:
             allocation, _, method = run_pypfopt_max_sharpe(tickers, start_date, end_date)
-    else:
-        allocation, _, method = run_pypfopt_max_sharpe(tickers, start_date, end_date)
 
     
     sector_alloc_pct = sector_breakdown_from_weights(allocation, sector_map)
@@ -520,6 +722,49 @@ def optimize_portfolio_with_finrl(json_path:str,
         "trade_plan": trade_plan,  
     }
     return result
+
+
+def format_optimization_report(result: dict, top_n: int = 10, min_trade_dollars: float = 25.0, max_trades: int = 12) -> str:
+    method = result.get("method", "unknown")
+    pv = result.get("portfolio_value_used")
+
+    alloc = result.get("final_allocation_weights", {}) or {}
+    top_alloc = sorted(alloc.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+
+    sec = result.get("sector_allocation_percent", {}) or {}
+    sec_sorted = sorted(sec.items(), key=lambda kv: kv[1], reverse=True)
+
+    plan = result.get("trade_plan", {}) or {}
+    moves = []
+    for t, p in plan.items():
+        action = p.get("action")
+        delta = float(p.get("delta", 0.0))
+        if action in ("BUY", "SELL") and abs(delta) >= float(min_trade_dollars):
+            moves.append((t, action, delta, p.get("est_shares", 0.0), p.get("est_price", 0.0)))
+    moves = sorted(moves, key=lambda x: abs(x[2]), reverse=True)[:max_trades]
+
+    lines = []
+    lines.append(f"Optimization method: {method}")
+    if isinstance(pv, (int, float)):
+        lines.append(f"Portfolio value used: ${pv:,.2f}")
+    lines.append("")
+    lines.append(f"Final allocation (top {len(top_alloc)}):")
+    for t, w in top_alloc:
+        lines.append(f"- {t}: {w*100:.2f}%")
+    lines.append("")
+    lines.append("Sector allocation:")
+    for s, pct in sec_sorted:
+        lines.append(f"- {s}: {pct:.2f}%")
+    lines.append("")
+    lines.append(f"Trade plan (>|${min_trade_dollars:.0f}|, top {len(moves)}):")
+    if not moves:
+        lines.append("- No trades above threshold.")
+    else:
+        for t, action, delta, shares, price in moves:
+            lines.append(f"- {action} {t}: ${delta:,.2f} (~{shares} shares @ ${price})")
+
+    return "\n".join(lines)
+
 
 
 if __name__ == "__main__":

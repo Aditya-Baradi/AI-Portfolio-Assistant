@@ -2,292 +2,1139 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>AI Portfolio Assistant</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Portfolio Assistant</title>
   <style>
+    :root {
+      --paper:      #f4f1ea;   /* warm off-white background */
+      --surface:    #ffffff;
+      --surface-2:  #fbfaf6;
+      --ink:        #201f1b;   /* near-black ink */
+      --muted:      #6f6a60;   /* secondary text */
+      --line:       #e3ddd1;   /* hairline borders */
+      --line-strong:#d3ccbd;
+      --accent:     #2f5d50;   /* deep muted green */
+      --accent-dark:#264a40;
+      --user-bg:    #ecf1ec;   /* soft green tint for user bubbles */
+      --user-line:  #d3ddd4;
+      --danger:     #8c3b2e;
+      --shadow:     0 1px 2px rgba(32,31,27,.05), 0 1px 1px rgba(32,31,27,.04);
+      --serif: Georgia, "Iowan Old Style", "Times New Roman", serif;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body { height: 100%; }
+
     body {
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #020617;
-      color: #e5e7eb;
+      font-family: var(--sans);
+      background: var(--paper);
+      color: var(--ink);
       margin: 0;
       display: flex;
       justify-content: center;
-      padding: 24px;
+      padding: 16px 20px;
+      overflow: hidden;   /* the app fits the viewport; only the chat scrolls */
+      -webkit-font-smoothing: antialiased;
     }
+
+    .hidden { display: none !important; }
+
+    /* ================= Auth view ================= */
+    .auth-wrap {
+      width: 100%;
+      max-width: 400px;
+      margin-top: 9vh;
+      display: flex;
+      flex-direction: column;
+      gap: 22px;
+    }
+    .auth-brand { display: flex; align-items: baseline; gap: 11px; justify-content: center; }
+    .auth-card {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      padding: 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .auth-tabs {
+      display: flex;
+      border-bottom: 1px solid var(--line);
+      gap: 18px;
+    }
+    .auth-tab {
+      background: none;
+      border: none;
+      padding: 0 2px 10px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: var(--muted);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+    }
+    .auth-tab.active { color: var(--ink); border-bottom-color: var(--accent); }
+    .field { display: flex; flex-direction: column; gap: 5px; }
+    .field label {
+      font-size: 0.68rem;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-weight: 600;
+    }
+    .field input {
+      padding: 10px 11px;
+      border-radius: 7px;
+      border: 1px solid var(--line-strong);
+      background: var(--surface);
+      color: var(--ink);
+      font-family: inherit;
+      font-size: 0.92rem;
+    }
+    .field input:focus { outline: none; border-color: var(--accent); }
+    .auth-error { color: var(--danger); font-size: 0.82rem; min-height: 1.1em; }
+    .auth-note { font-size: 0.75rem; color: var(--muted); text-align: center; }
+
+    /* ================= App shell ================= */
     .app {
       width: 100%;
-      max-width: 900px;
-      display: flex;
+      height: 100%;
+      display: none;
       flex-direction: column;
       gap: 12px;
     }
+    .app.active { display: flex; }
+
     .header {
       display: flex;
       justify-content: space-between;
-      align-items: baseline;
+      align-items: center;
+      gap: 20px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--line-strong);
+      flex: none;
+    }
+    .brand { display: flex; align-items: baseline; gap: 11px; }
+    .mark {
+      width: 10px; height: 10px;
+      background: var(--accent);
+      border-radius: 2px;
+      transform: translateY(-2px);
+      flex: none;
     }
     .title {
-      font-size: 1.4rem;
+      font-family: var(--serif);
+      font-size: 1.7rem;
       font-weight: 600;
+      letter-spacing: -0.01em;
+      line-height: 1;
+      margin: 0;
     }
     .subtitle {
-      font-size: 0.9rem;
-      color: #9ca3af;
+      font-size: 0.86rem;
+      color: var(--muted);
+      margin: 7px 0 0;
+      max-width: 46ch;
+      line-height: 1.45;
     }
-    .session-row {
+    .account {
       display: flex;
-      gap: 8px;
       align-items: center;
-      margin-top: 4px;
-      font-size: 0.9rem;
+      gap: 10px;
     }
-    .session-row input {
-      flex: 1;
-      padding: 6px 8px;
-      border-radius: 6px;
-      border: 1px solid #4b5563;
-      background: #020617;
-      color: #e5e7eb;
+    .account-email {
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      color: var(--muted);
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 7px 10px;
+      max-width: 220px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
-    .chat-window {
+
+    .layout {
+      display: grid;
+      grid-template-columns: 190px minmax(0, 1fr) 320px;
+      gap: 18px;
+      align-items: stretch;
       flex: 1;
-      min-height: 400px;
-      max-height: 70vh;
-      overflow-y: auto;
-      border-radius: 12px;
-      border: 1px solid #1f2933;
-      padding: 12px;
-      background: radial-gradient(circle at top left, #111827, #020617);
+      min-height: 0;   /* lets the chat column shrink to the viewport */
+    }
+    .chat-col {
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 10px;
+      min-width: 0;
+      min-height: 0;
     }
-    .msg {
-      max-width: 80%;
-      padding: 8px 12px;
+
+    /* ---------- Chats sidebar ---------- */
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      min-height: 0;
+      overflow-y: auto;
+    }
+    .new-chat {
+      width: 100%;
+      text-align: left;
+      background: var(--surface);
+      color: var(--accent);
+      border: 1px solid var(--line-strong);
+      font-weight: 600;
+    }
+    .new-chat:hover { border-color: var(--accent); background: var(--surface-2); }
+    .chats-label {
+      font-size: 0.64rem;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-weight: 600;
+      margin: 6px 2px 0;
+    }
+    .chat-list { display: flex; flex-direction: column; gap: 4px; }
+    .chat-item {
+      text-align: left;
+      background: none;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 0.82rem;
+      color: var(--ink);
+      cursor: pointer;
+      line-height: 1.35;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      font-weight: 400;
+    }
+    .chat-item:hover { background: var(--surface); border-color: var(--line); }
+    .chat-item.active {
+      background: var(--surface);
+      border-color: var(--line-strong);
+      font-weight: 600;
+    }
+    .chat-empty { font-size: 0.78rem; color: var(--muted); padding: 4px 2px; }
+
+    /* ---------- Chat window ---------- */
+    .chat-window {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
       border-radius: 12px;
-      font-size: 0.95rem;
+      border: 1px solid var(--line);
+      padding: 20px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--line-strong) transparent;
+    }
+    .chat-window::-webkit-scrollbar { width: 9px; }
+    .chat-window::-webkit-scrollbar-thumb {
+      background: var(--line-strong);
+      border-radius: 20px;
+      border: 3px solid var(--surface);
+    }
+    #chatWindow:empty::before {
+      content: "Import your portfolio, then ask anything: how risky it is, what the news says about your stocks, or how it compares to the S&P 500.";
+      color: var(--muted);
+      font-size: 0.9rem;
+      line-height: 1.5;
+      margin: auto;
+      max-width: 34ch;
+      text-align: center;
+    }
+
+    .msg {
+      max-width: 82%;
+      padding: 11px 14px;
+      border-radius: 12px;
+      font-size: 0.93rem;
+      line-height: 1.5;
       white-space: pre-wrap;
+      word-wrap: break-word;
     }
     .msg.user {
       margin-left: auto;
-      background: #1d4ed8;
+      background: var(--user-bg);
+      border: 1px solid var(--user-line);
+      border-bottom-right-radius: 4px;
     }
     .msg.assistant {
       margin-right: auto;
-      background: #111827;
-      border: 1px solid #1f2937;
+      background: var(--surface-2);
+      border: 1px solid var(--line);
+      border-bottom-left-radius: 4px;
+      white-space: normal;   /* assistant messages are rendered markdown */
+      max-width: 88%;
     }
-    .input-row {
-      display: flex;
-      gap: 8px;
-      margin-top: 8px;
+    .msg.assistant p { margin: 0 0 8px; }
+    .msg.assistant p:last-child { margin-bottom: 0; }
+    .msg.assistant ul, .msg.assistant ol { margin: 0 0 8px; padding-left: 20px; }
+    .msg.assistant li { margin: 3px 0; }
+    .msg.assistant code {
+      font-family: var(--mono);
+      font-size: 0.85em;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 1px 5px;
     }
-    .input-row textarea {
-      flex: 1;
-      resize: none;
-      min-height: 40px;
-      max-height: 120px;
-      border-radius: 8px;
-      border: 1px solid #4b5563;
-      padding: 8px;
-      background: #020617;
-      color: #e5e7eb;
-      font-family: inherit;
-      font-size: 0.95rem;
+    .msg.assistant .md-h {
+      font-weight: 700;
+      margin: 10px 0 6px;
     }
-    .input-row button {
-      padding: 0 16px;
-      border-radius: 8px;
-      border: none;
-      cursor: pointer;
-      font-weight: 500;
-      background: #22c55e;
-      color: #020617;
+    .msg.assistant .tbl-wrap { overflow-x: auto; margin: 4px 0 8px; }
+    .msg.assistant table {
+      border-collapse: collapse;
+      font-size: 0.86rem;
+      font-variant-numeric: tabular-nums;
+      width: 100%;
     }
-    .input-row button:disabled {
-      opacity: 0.6;
-      cursor: default;
+    .msg.assistant th {
+      text-align: left;
+      font-size: 0.66rem;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      font-weight: 600;
+      color: var(--muted);
+      border-bottom: 1px solid var(--line-strong);
+      padding: 5px 14px 6px 0;
+      white-space: nowrap;
     }
+    .msg.assistant td {
+      border-bottom: 1px solid var(--line);
+      padding: 5px 14px 5px 0;
+      vertical-align: top;
+    }
+    .msg.assistant tr:last-child td { border-bottom: none; }
+
     .status {
       font-size: 0.8rem;
-      color: #9ca3af;
+      color: var(--muted);
       min-height: 1em;
+      font-style: italic;
+    }
+
+    /* ---------- Composer ---------- */
+    .composer {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .composer:focus-within { border-color: var(--line-strong); }
+    #messageInput {
+      width: 100%;
+      resize: none;
+      min-height: 44px;
+      max-height: 140px;
+      border: none;
+      outline: none;
+      padding: 4px 4px 0;
+      background: transparent;
+      color: var(--ink);
+      font-family: inherit;
+      font-size: 0.95rem;
+      line-height: 1.5;
+    }
+    #messageInput::placeholder { color: #a8a294; }
+
+    .composer-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-top: 1px solid var(--line);
+      padding-top: 10px;
+    }
+    .attach {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      cursor: pointer;
+      font-size: 0.83rem;
+      color: var(--muted);
+      padding: 6px 10px;
+      border-radius: 7px;
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+      transition: border-color .12s ease, color .12s ease;
+    }
+    .attach:hover { border-color: var(--line-strong); color: var(--ink); }
+    #fileInput { display: none; }
+    .file-name {
+      font-size: 0.8rem;
+      color: var(--muted);
+      font-family: var(--mono);
+      max-width: 200px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .spacer { flex: 1; }
+
+    button {
+      font-family: inherit;
+      cursor: pointer;
+      border-radius: 8px;
+      font-size: 0.87rem;
+      font-weight: 600;
+      padding: 9px 18px;
+      transition: background-color .12s ease, border-color .12s ease, opacity .12s ease;
+    }
+    button:disabled { opacity: 0.5; cursor: default; }
+    .btn-primary {
+      background: var(--accent);
+      color: #f4f1ea;
+      border: 1px solid var(--accent);
+    }
+    .btn-primary:not(:disabled):hover { background: var(--accent-dark); border-color: var(--accent-dark); }
+    .btn-ghost {
+      background: var(--surface);
+      color: var(--accent);
+      border: 1px solid var(--line-strong);
+    }
+    .btn-ghost:not(:disabled):hover { border-color: var(--accent); background: var(--surface-2); }
+    .btn-quiet {
+      background: none;
+      color: var(--muted);
+      border: 1px solid var(--line);
+      padding: 7px 12px;
+      font-size: 0.8rem;
+    }
+    .btn-quiet:hover { color: var(--ink); border-color: var(--line-strong); }
+
+    .disclaimer {
+      font-size: 0.72rem;
+      color: var(--muted);
+      text-align: center;
+      margin: 0;
+      flex: none;
+    }
+
+    /* ---------- Portfolio panel ---------- */
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      align-self: start;
+      max-height: 100%;
+      overflow-y: auto;
+    }
+    .panel-title {
+      font-family: var(--serif);
+      font-size: 1.02rem;
+      font-weight: 600;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--line);
+    }
+    .panel-empty {
+      color: var(--muted);
+      font-size: 0.84rem;
+      line-height: 1.5;
+      padding: 22px 4px;
+      text-align: center;
+    }
+    .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .tile {
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: var(--surface-2);
+      padding: 10px 12px;
+    }
+    .tile .k {
+      font-size: 0.64rem;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .tile .v {
+      font-size: 1.12rem;
+      font-weight: 650;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -0.01em;
+    }
+    .tile .v.pos { color: var(--accent); }
+    .tile .v.neg { color: var(--danger); }
+    .chart-head { display: flex; justify-content: space-between; align-items: baseline; }
+    .chart-title { font-size: 0.78rem; font-weight: 600; color: var(--ink); }
+    .chart-sub { font-size: 0.68rem; color: var(--muted); }
+    .proj-chart { width: 100%; height: auto; display: block; }
+
+    /* ---------- Holdings news-sentiment list ---------- */
+    .holdings-list {
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: var(--surface-2);
+      max-height: 205px;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--line-strong) transparent;
+    }
+    .holding-row {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      padding: 6px 11px;
+      border-bottom: 1px solid var(--line);
+      font-size: 0.82rem;
+      font-variant-numeric: tabular-nums;
+    }
+    .holding-row:last-child { border-bottom: none; }
+    .h-tick { font-weight: 600; min-width: 52px; }
+    .h-val { color: var(--muted); font-size: 0.76rem; margin-left: auto; }
+    .h-score { font-weight: 650; min-width: 52px; text-align: right; }
+    .h-score.up { color: #177a53; }
+    .h-score.down { color: var(--danger); }
+    .h-score.flat { color: var(--muted); font-weight: 400; }
+    .h-sig {
+      font-size: 0.64rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      border-radius: 5px;
+      padding: 2px 0;
+      min-width: 44px;
+      text-align: center;
+    }
+    .h-sig.buy { background: rgba(23, 122, 83, 0.12); color: #177a53; }
+    .h-sig.sell { background: rgba(140, 59, 46, 0.12); color: var(--danger); }
+    .h-sig.hold { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+    .holdings-loading {
+      padding: 14px 12px;
+      font-size: 0.76rem;
+      color: var(--muted);
+    }
+    .panel-note {
+      font-size: 0.68rem;
+      color: var(--muted);
+      line-height: 1.45;
+      border-top: 1px solid var(--line);
+      padding-top: 10px;
+    }
+
+    @media (max-width: 1000px) {
+      /* single-screen layout isn't possible on small viewports: allow scrolling */
+      body { overflow: auto; }
+      .app { height: auto; }
+      .layout { grid-template-columns: 1fr; flex: none; }
+      .sidebar, .panel { max-height: none; overflow: visible; }
+      .chat-window { min-height: 320px; max-height: 60vh; }
+      .panel { order: -1; }
+    }
+    @media (max-width: 560px) {
+      body { padding: 20px 14px; }
+      .header { flex-direction: column; align-items: stretch; gap: 14px; }
+      .msg { max-width: 90%; }
     }
   </style>
 </head>
 <body>
-  <div class="app">
+
+  <!-- ================= Sign in / register ================= -->
+  <div class="auth-wrap" id="authView">
+    <div class="auth-brand">
+      <span class="mark" aria-hidden="true"></span>
+      <h1 class="title">Portfolio Assistant</h1>
+    </div>
+    <div class="auth-card">
+      <div class="auth-tabs">
+        <button class="auth-tab active" id="tabLogin" type="button">Sign in</button>
+        <button class="auth-tab" id="tabRegister" type="button">Create account</button>
+      </div>
+      <div class="field">
+        <label for="authEmail">Email</label>
+        <input id="authEmail" type="email" autocomplete="username" placeholder="you@example.com" />
+      </div>
+      <div class="field">
+        <label for="authPassword">Password</label>
+        <input id="authPassword" type="password" autocomplete="current-password" placeholder="at least 8 characters" />
+      </div>
+      <div class="auth-error" id="authError"></div>
+      <button class="btn-primary" id="authSubmit" type="button">Sign in</button>
+    </div>
+    <p class="auth-note">Your password is stored securely. This app is for learning, not investment advice.</p>
+  </div>
+
+  <!-- ================= App ================= -->
+  <div class="app" id="appView">
     <div class="header">
-      <div>
-        <div class="title">AI Portfolio Assistant</div>
-        <div class="subtitle">
-          Ask about allocation, risk, backtests, or your holdings.
-          Educational only — not investment advice.
-        </div>
-        <div class="session-row">
-          <span>Session ID:</span>
-          <input id="sessionId" type="text" placeholder="e.g., your email or nickname" />
-        </div>
+      <div class="brand">
+        <span class="mark" aria-hidden="true"></span>
+        <h1 class="title">Portfolio Assistant</h1>
+      </div>
+      <div class="account">
+        <span class="account-email" id="accountEmail"></span>
+        <button class="btn-quiet" id="logoutBtn" type="button">Sign out</button>
       </div>
     </div>
 
-    <div id="chatWindow" class="chat-window"></div>
+    <div class="layout">
+      <aside class="sidebar">
+        <button class="new-chat" id="newChatBtn" type="button">+ New chat</button>
+        <div class="chats-label">Recent chats</div>
+        <div class="chat-list" id="chatList">
+          <div class="chat-empty">No chats yet.</div>
+        </div>
+      </aside>
 
-    <div class="status" id="status"></div>
+      <div class="chat-col">
+        <div id="chatWindow" class="chat-window"></div>
+        <div class="status" id="status"></div>
+        <div class="composer">
+          <textarea id="messageInput" placeholder="Ask about your portfolio…"></textarea>
+          <div class="composer-actions">
+            <label class="attach" for="fileInput">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+              Attach
+            </label>
+            <input type="file" id="fileInput" />
+            <span class="file-name" id="fileName"></span>
+            <span class="spacer"></span>
+            <button class="btn-ghost" id="uploadBtn" type="button">Import portfolio</button>
+            <button class="btn-primary" id="sendBtn" type="button">Send</button>
+          </div>
+        </div>
+      </div>
 
-    <div class="input-row">
-
-      
-      <input 
-        type="file"
-        id="fileInput"
-        class="file-input"
-      />
-      <button id="uploadBtn" type="button" class="send-btn">
-        Upload File
-      </button>
-
-      
-      <textarea id="messageInput" placeholder="Ask a question about your portfolio..."></textarea>
-
-      
-      <button id="sendBtn" type="button" class="send-btn">
-        Send
-      </button>
-
+      <aside class="panel" id="portfolioPanel">
+        <div class="panel-title">Your portfolio</div>
+        <div id="projBox">
+          <div class="panel-empty">
+            Import your portfolio to see what it's worth today and where it could go over the next year.
+          </div>
+        </div>
+        <div id="holdingsBox"></div>
+      </aside>
     </div>
 
+    <p class="disclaimer">For learning only. Not investment advice.</p>
+  </div>
 
-  
 <script>
-  const API_URL = "http://127.0.0.1:8000/chat";
-  const UPLOAD_URL = "http://127.0.0.1:8000/upload";
+  // Served by the backend itself; fall back to localhost when opened as a file.
+  const API_BASE = location.origin.startsWith("http") ? location.origin : "http://127.0.0.1:8000";
+
+  // ---------------- auth state ----------------
+  let token = localStorage.getItem("authToken") || "";
+  let userEmail = localStorage.getItem("authEmail") || "";
+  let currentChatId = null;
+  let authMode = "login";
+
+  const authView = document.getElementById("authView");
+  const appView = document.getElementById("appView");
+  const authError = document.getElementById("authError");
+  const authSubmit = document.getElementById("authSubmit");
+  const authEmail = document.getElementById("authEmail");
+  const authPassword = document.getElementById("authPassword");
+  const tabLogin = document.getElementById("tabLogin");
+  const tabRegister = document.getElementById("tabRegister");
 
   const chatWindow = document.getElementById("chatWindow");
   const messageInput = document.getElementById("messageInput");
   const sendBtn = document.getElementById("sendBtn");
   const statusEl = document.getElementById("status");
-  const sessionInput = document.getElementById("sessionId");
-
   const fileInput = document.getElementById("fileInput");
   const uploadBtn = document.getElementById("uploadBtn");
+  const fileName = document.getElementById("fileName");
+  const chatList = document.getElementById("chatList");
+  const projBox = document.getElementById("projBox");
+  const holdingsBox = document.getElementById("holdingsBox");
 
-  const savedSessionId = localStorage.getItem("sessionId");
-  if (savedSessionId) {
-    sessionInput.value = savedSessionId;
+  function authHeaders(extra) {
+    return Object.assign({ "Authorization": "Bearer " + token }, extra || {});
   }
 
-  const savedChatHtml = localStorage.getItem("chatHtml");
-  if (savedChatHtml) {
-    chatWindow.innerHTML = savedChatHtml;
+  async function api(path, opts) {
+    const res = await fetch(API_BASE + path, opts);
+    if (res.status === 401) { signOutLocal(); throw new Error("Signed out."); }
+    return res;
   }
 
-  sessionInput.addEventListener("input", () => {
-    localStorage.setItem("sessionId", sessionInput.value);
+  function setAuthMode(mode) {
+    authMode = mode;
+    tabLogin.classList.toggle("active", mode === "login");
+    tabRegister.classList.toggle("active", mode === "register");
+    authSubmit.textContent = mode === "login" ? "Sign in" : "Create account";
+    authPassword.autocomplete = mode === "login" ? "current-password" : "new-password";
+    authError.textContent = "";
+  }
+  tabLogin.addEventListener("click", () => setAuthMode("login"));
+  tabRegister.addEventListener("click", () => setAuthMode("register"));
+
+  async function submitAuth() {
+    authError.textContent = "";
+    authSubmit.disabled = true;
+    try {
+      const res = await fetch(API_BASE + "/auth/" + (authMode === "login" ? "login" : "register"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: authEmail.value, password: authPassword.value }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        authError.textContent = data.detail || "Something went wrong.";
+        return;
+      }
+      token = data.token; userEmail = data.email;
+      localStorage.setItem("authToken", token);
+      localStorage.setItem("authEmail", userEmail);
+      enterApp();
+    } catch (e) {
+      authError.textContent = "Cannot reach the backend on " + API_BASE + ". Is it running?";
+    } finally {
+      authSubmit.disabled = false;
+    }
+  }
+  authSubmit.addEventListener("click", submitAuth);
+  authPassword.addEventListener("keydown", (e) => { if (e.key === "Enter") submitAuth(); });
+
+  function signOutLocal() {
+    token = ""; userEmail = "";
+    localStorage.removeItem("authToken");
+    localStorage.removeItem("authEmail");
+    appView.classList.remove("active");
+    authView.classList.remove("hidden");
+    authPassword.value = "";
+  }
+
+  document.getElementById("logoutBtn").addEventListener("click", async () => {
+    try { await fetch(API_BASE + "/auth/logout", { method: "POST", headers: authHeaders() }); } catch {}
+    signOutLocal();
   });
 
+  async function enterApp() {
+    authView.classList.add("hidden");
+    appView.classList.add("active");
+    document.getElementById("accountEmail").textContent = userEmail;
+    loadProjection();
+    loadHoldings();
+    const chats = await loadChats();
+    // Restore the chat that was open before a reload, if it still exists.
+    const saved = localStorage.getItem("chat:" + userEmail);
+    if (saved && chats.some((c) => c.id === saved)) {
+      await openChat(saved);
+    } else {
+      newChat();
+    }
+  }
+
+  // ---------------- chats ----------------
+  function newChat() {
+    currentChatId = (crypto.randomUUID && crypto.randomUUID()) ||
+      "c-" + Date.now() + "-" + Math.random().toString(36).slice(2, 10);
+    chatWindow.innerHTML = "";
+    highlightChat(null);
+    if (userEmail) localStorage.removeItem("chat:" + userEmail);
+  }
+
+  function highlightChat(id) {
+    for (const el of chatList.querySelectorAll(".chat-item")) {
+      el.classList.toggle("active", el.dataset.id === id);
+    }
+  }
+
+  async function loadChats() {
+    try {
+      const res = await api("/chats", { headers: authHeaders() });
+      if (!res.ok) return [];
+      const data = await res.json();
+      chatList.innerHTML = "";
+      if (!data.chats.length) {
+        chatList.innerHTML = '<div class="chat-empty">No chats yet.</div>';
+        return [];
+      }
+      for (const c of data.chats) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "chat-item";
+        b.dataset.id = c.id;
+        b.textContent = c.title;
+        b.addEventListener("click", () => openChat(c.id));
+        chatList.appendChild(b);
+      }
+      highlightChat(currentChatId);
+      return data.chats;
+    } catch { return []; }
+  }
+
+  async function openChat(id) {
+    try {
+      const res = await api(`/chats/${encodeURIComponent(id)}/messages`, { headers: authHeaders() });
+      if (!res.ok) return;
+      const data = await res.json();
+      currentChatId = id;
+      localStorage.setItem("chat:" + userEmail, id);
+      chatWindow.innerHTML = "";
+      for (const m of data.messages) addMessage(m.role, m.content);
+      highlightChat(id);
+    } catch {}
+  }
+
+  document.getElementById("newChatBtn").addEventListener("click", newChat);
+
+  // ---------------- markdown rendering (assistant messages) ----------------
+  function escapeHtml(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+  function mdInline(s) {
+    return s
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
+  }
+  function renderMarkdown(src) {
+    const lines = escapeHtml(src).split(/\r?\n/);
+    const isTableLine = (l) => /^\s*\|.*\|\s*$/.test(l);
+    const isSepLine = (l) => /^\s*\|[\s:|-]+\|\s*$/.test(l) && l.includes("-");
+    const splitRow = (l) =>
+      l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => mdInline(c.trim()));
+
+    const out = [];
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+
+      if (isTableLine(line) && i + 1 < lines.length && isSepLine(lines[i + 1])) {
+        const header = splitRow(line);
+        i += 2;
+        const rows = [];
+        while (i < lines.length && isTableLine(lines[i]) && !isSepLine(lines[i])) {
+          rows.push(splitRow(lines[i])); i++;
+        }
+        out.push(
+          '<div class="tbl-wrap"><table><thead><tr>' +
+          header.map((h) => `<th>${h}</th>`).join("") +
+          "</tr></thead><tbody>" +
+          rows.map((r) => "<tr>" + r.map((c) => `<td>${c}</td>`).join("") + "</tr>").join("") +
+          "</tbody></table></div>"
+        );
+        continue;
+      }
+      if (/^\s*[-*•]\s+/.test(line)) {
+        const items = [];
+        while (i < lines.length && /^\s*[-*•]\s+/.test(lines[i])) {
+          items.push(lines[i].replace(/^\s*[-*•]\s+/, "")); i++;
+        }
+        out.push("<ul>" + items.map((x) => `<li>${mdInline(x)}</li>`).join("") + "</ul>");
+        continue;
+      }
+      if (/^\s*\d+[.)]\s+/.test(line)) {
+        const items = [];
+        while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) {
+          items.push(lines[i].replace(/^\s*\d+[.)]\s+/, "")); i++;
+        }
+        out.push("<ol>" + items.map((x) => `<li>${mdInline(x)}</li>`).join("") + "</ol>");
+        continue;
+      }
+      if (/^#{1,4}\s+/.test(line)) {
+        out.push(`<p class="md-h">${mdInline(line.replace(/^#{1,4}\s+/, ""))}</p>`);
+        i++;
+        continue;
+      }
+      if (line.trim() === "") { i++; continue; }
+
+      const para = [];
+      while (
+        i < lines.length && lines[i].trim() !== "" &&
+        !isTableLine(lines[i]) && !/^\s*([-*•]|\d+[.)])\s+/.test(lines[i]) && !/^#{1,4}\s+/.test(lines[i])
+      ) { para.push(lines[i]); i++; }
+      out.push(`<p>${mdInline(para.join("<br>"))}</p>`);
+    }
+    return out.join("");
+  }
+
+  // ---------------- messages ----------------
   function addMessage(role, text) {
     const div = document.createElement("div");
     div.className = "msg " + role;
-    div.textContent = text;
+    text = String(text);
+
+    // Pull out generated chart paths; shown as images, not as raw text lines.
+    const chartPaths = text.match(/\/charts\/[\w.-]+\.png/g);
+    const cleaned = chartPaths
+      ? text.split(/\r?\n/).filter((l) => !/^\s*\/charts\/[\w.-]+\.png\s*$/.test(l)).join("\n")
+      : text;
+
+    if (role === "assistant") {
+      div.innerHTML = renderMarkdown(cleaned);
+    } else {
+      div.textContent = cleaned;
+    }
+
+    if (chartPaths) {
+      for (const p of chartPaths) {
+        const img = document.createElement("img");
+        img.src = API_BASE + p;
+        img.alt = "chart";
+        img.style.cssText = "display:block;max-width:100%;border-radius:8px;border:1px solid var(--line);margin-top:10px;background:#fff;";
+        div.appendChild(img);
+      }
+    }
+
     chatWindow.appendChild(div);
     chatWindow.scrollTop = chatWindow.scrollHeight;
-
-    localStorage.setItem("chatHtml", chatWindow.innerHTML);
   }
 
   async function sendMessage() {
     const text = messageInput.value.trim();
-    const sessionId = sessionInput.value.trim() || "anonymous";
-    if (!text) return;
+    if (!text || !token) return;
+    const isFirst = chatWindow.children.length === 0;
 
     messageInput.value = "";
+    messageInput.style.height = "auto";
     addMessage("user", text);
-
     sendBtn.disabled = true;
-    statusEl.textContent = "Talking to backend…";
+    statusEl.textContent = "Thinking…";
 
     try {
-      const res = await fetch(API_URL, {
+      const res = await api("/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: text,
-          session_id: sessionId,
-        }),
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ message: text, chat_id: currentChatId }),
       });
-
+      const raw = await res.text();
       if (!res.ok) {
-        addMessage(
-          "assistant",
-          `Backend error: ${res.status} ${res.statusText} (is FastAPI running on http://127.0.0.1:8000?)`
-        );
-        statusEl.textContent = "";
-        sendBtn.disabled = false;
+        let detail = raw.slice(0, 2000);
+        try { detail = JSON.parse(raw).detail || detail; } catch {}
+        addMessage("assistant", `Backend error (${res.status}): ${detail}`);
         return;
       }
-
-      const data = await res.json();
-      addMessage("assistant", data.answer || "[empty response]");
-      statusEl.textContent = "";
+      let data;
+      try { data = JSON.parse(raw); }
+      catch { addMessage("assistant", `Backend returned non-JSON:\n\n${raw.slice(0, 2000)}`); return; }
+      addMessage("assistant", data.answer ?? "[empty response]");
+      localStorage.setItem("chat:" + userEmail, currentChatId);
+      if (isFirst) loadChats(); // the chat now exists server-side with a title
     } catch (err) {
-      console.error(err);
-      addMessage(
-        "assistant",
-        "Network error talking to backend. Make sure FastAPI is running on http://127.0.0.1:8000 and CORS is enabled."
-      );
-      statusEl.textContent = "";
+      addMessage("assistant", `Request failed: ${err?.message || err}`);
     } finally {
       sendBtn.disabled = false;
-    }
-  }
-
-  async function uploadFile() {
-    const sessionId = sessionInput.value.trim() || "anonymous";
-    const file = fileInput.files[0];
-
-    if (!file) {
-      addMessage("assistant", "Please choose a file first.");
-      return;
-    }
-
-    addMessage("user", `Uploading file: ${file.name}`);
-    uploadBtn.disabled = true;
-    statusEl.textContent = "Uploading…";
-
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("session_id", sessionId);
-
-      const res = await fetch(UPLOAD_URL, {
-        method: "POST",
-        body: formData,
-      });
-
-      const data = await res.json();
-      addMessage("assistant", data.message || "File received.");
-    } catch (err) {
-      console.error(err);
-      addMessage(
-        "assistant",
-        "Upload failed. Is the backend /upload endpoint running on http://127.0.0.1:8000?"
-      );
-    } finally {
-      uploadBtn.disabled = false;
       statusEl.textContent = "";
     }
   }
 
   sendBtn.addEventListener("click", sendMessage);
+  messageInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  });
+  messageInput.addEventListener("input", () => {
+    messageInput.style.height = "auto";
+    messageInput.style.height = Math.min(messageInput.scrollHeight, 140) + "px";
+  });
+
+  // ---------------- upload ----------------
+  fileInput.addEventListener("change", () => {
+    fileName.textContent = fileInput.files && fileInput.files[0] ? fileInput.files[0].name : "";
+  });
+
+  async function uploadFile() {
+    const file = fileInput.files && fileInput.files[0];
+    if (!file) { addMessage("assistant", "Please choose a file first (Attach)."); return; }
+
+    addMessage("user", `Importing portfolio: ${file.name}`);
+    uploadBtn.disabled = true;
+    statusEl.textContent = "Importing…";
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await api("/upload", { method: "POST", headers: authHeaders(), body: formData });
+      const raw = await res.text();
+      let data;
+      try { data = JSON.parse(raw); } catch { data = { message: raw }; }
+      addMessage("assistant", data.message ?? "File received.");
+      loadProjection();
+      loadHoldings();
+    } catch (err) {
+      addMessage("assistant", `Upload failed: ${err?.message || err}`);
+    } finally {
+      uploadBtn.disabled = false;
+      statusEl.textContent = "";
+      fileInput.value = "";
+      fileName.textContent = "";
+    }
+  }
   uploadBtn.addEventListener("click", uploadFile);
 
-  messageInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
+  // ---------------- portfolio panel ----------------
+  function money(v) {
+    return "$" + Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 });
+  }
+
+  function friendlyDate(iso) {
+    // "2026-07-10" -> "10 July 2026"
+    const d = new Date(iso + "T00:00:00");
+    if (isNaN(d)) return iso;
+    return d.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+  }
+
+  function projChartSVG(d) {
+    const W = 288, H = 168, L = 8, R = 64, T = 10, B = 22;
+    const iw = W - L - R, ih = H - T - B;
+    const lo = Math.min(...d.pessimistic), hi = Math.max(...d.optimistic);
+    const pad = (hi - lo) * 0.06;
+    const y0 = lo - pad, y1 = hi + pad;
+    const X = (i) => L + (i / (d.months.length - 1)) * iw;
+    const Y = (v) => T + (1 - (v - y0) / (y1 - y0)) * ih;
+    const pts = (arr) => arr.map((v, i) => `${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(" ");
+
+    const band =
+      d.optimistic.map((v, i) => `${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(" L") +
+      " L" +
+      [...d.pessimistic].reverse().map((v, i) => {
+        const j = d.pessimistic.length - 1 - i;
+        return `${X(j).toFixed(1)},${Y(v).toFixed(1)}`;
+      }).join(" L");
+
+    let grid = "";
+    for (let g = 0; g < 3; g++) {
+      const gy = Y(y0 + ((g + 1) / 4) * (y1 - y0));
+      grid += `<line x1="${L}" x2="${L + iw}" y1="${gy.toFixed(1)}" y2="${gy.toFixed(1)}" stroke="#eee9de" stroke-width="1"/>`;
     }
-  });
+
+    const last = d.months.length - 1;
+    const lblX = (X(last) + 5).toFixed(1);
+    return `
+      <svg class="proj-chart" viewBox="0 0 ${W} ${H}" role="img"
+           aria-label="Projected portfolio value over 12 months with optimistic and pessimistic bands">
+        ${grid}
+        <path d="M${band} Z" fill="rgba(23,122,83,0.10)" stroke="none"/>
+        <polyline points="${pts(d.median)}" fill="none" stroke="#177a53" stroke-width="2"
+                  stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="${X(0).toFixed(1)}" cy="${Y(d.median[0]).toFixed(1)}" r="2.6" fill="#177a53"/>
+        <text x="${lblX}" y="${(Y(d.optimistic[last]) + 3).toFixed(1)}" font-size="8.4" fill="#6f6a60"
+              font-family="ui-monospace,Consolas,monospace">${money(d.optimistic[last])}</text>
+        <text x="${lblX}" y="${(Y(d.median[last]) + 3).toFixed(1)}" font-size="8.8" font-weight="700" fill="#177a53"
+              font-family="ui-monospace,Consolas,monospace">${money(d.median[last])}</text>
+        <text x="${lblX}" y="${(Y(d.pessimistic[last]) + 3).toFixed(1)}" font-size="8.4" fill="#6f6a60"
+              font-family="ui-monospace,Consolas,monospace">${money(d.pessimistic[last])}</text>
+        <text x="${L}" y="${H - 6}" font-size="8.4" fill="#6f6a60">Now</text>
+        <text x="${(L + iw / 2 - 10).toFixed(1)}" y="${H - 6}" font-size="8.4" fill="#6f6a60">+6 mo</text>
+        <text x="${(L + iw - 22).toFixed(1)}" y="${H - 6}" font-size="8.4" fill="#6f6a60">+1 yr</text>
+      </svg>`;
+  }
+
+  function renderPanel(d) {
+    const s = d.stats;
+    const retPct = (s.est_annual_return * 100);
+    const retCls = retPct >= 0 ? "pos" : "neg";
+    projBox.innerHTML = `
+      <div class="tiles">
+        <div class="tile"><div class="k">Value now</div><div class="v">${money(d.current_value)}</div></div>
+        <div class="tile"><div class="k">Est. gain / year</div><div class="v ${retCls}">${retPct >= 0 ? "+" : ""}${retPct.toFixed(1)}%</div></div>
+        <div class="tile" title="How much your portfolio's value tends to swing up and down in a year"><div class="k">Volatility</div><div class="v">${(s.volatility * 100).toFixed(1)}%</div></div>
+        <div class="tile" title="Return earned per unit of risk taken. Above 1 is good."><div class="k">Sharpe ratio</div><div class="v">${s.sharpe.toFixed(2)}</div></div>
+      </div>
+      <div class="chart-head" style="margin-top:12px">
+        <span class="chart-title">Next 12 months</span>
+        <span class="chart-sub">likely range</span>
+      </div>
+      ${projChartSVG(d)}
+      <div class="panel-note">
+        Based on ${s.history_years} years of price history for your ${s.n_holdings} stocks.
+        The line is the middle path and the shaded area is the likely range.
+        Real results can land outside it.
+      </div>`;
+  }
+
+  async function loadProjection() {
+    try {
+      const res = await api("/portfolio/projection", { headers: authHeaders() });
+      if (!res.ok) return; // no portfolio yet -> keep the empty state
+      renderPanel(await res.json());
+    } catch {}
+  }
+
+  // ---------------- holdings news-sentiment list ----------------
+  let holdingsData = null;
+
+  function renderHoldings() {
+    if (!holdingsData) return;
+    const rows = holdingsData.holdings.map((h) => {
+      const noNews = !h.n_headlines;
+      const cls = noNews || Math.abs(h.score) < 0.005 ? "flat" : h.score > 0 ? "up" : "down";
+      const scoreLabel = noNews ? "n/a" : `${h.score >= 0 ? "+" : ""}${h.score.toFixed(2)}`;
+      const sig = h.signal.toLowerCase(); // buy | hold | sell
+      const mood = h.label === "Bullish" ? "Mostly good news"
+        : h.label === "Bearish" ? "Mostly bad news" : "Mixed news";
+      return `<div class="holding-row" title="${noNews ? "No recent news found"
+          : `${mood} (${h.n_headlines} recent headlines)`}">
+        <span class="h-tick">${h.ticker}</span>
+        <span class="h-val">${money(h.value)}</span>
+        <span class="h-score ${cls}">${scoreLabel}</span>
+        <span class="h-sig ${sig}">${h.signal.toUpperCase()}</span>
+      </div>`;
+    }).join("");
+
+    holdingsBox.innerHTML = `
+      <div class="chart-head" style="margin-bottom:8px">
+        <span class="chart-title">Your stocks in the news</span>
+        <span class="chart-sub">as of ${friendlyDate(holdingsData.as_of)}</span>
+      </div>
+      <div class="holdings-list">${rows}</div>
+      <div class="panel-note" style="border-top:none;padding-top:8px">
+        The score shows how positive the recent news is about each stock,
+        from &minus;1 (bad news) to +1 (good news).
+        The <b>Buy&nbsp;/&nbsp;Sell</b> tag follows the news mood.
+        Use it as a starting point, not as advice.
+      </div>`;
+  }
+
+  async function loadHoldings() {
+    if (!holdingsData) {
+      holdingsBox.innerHTML = `
+        <div class="chart-head" style="margin-bottom:8px">
+          <span class="chart-title">Your stocks in the news</span>
+        </div>
+        <div class="holdings-list"><div class="holdings-loading">Reading the latest headlines…</div></div>`;
+    }
+    try {
+      const res = await api("/portfolio/sentiment", { headers: authHeaders() });
+      if (!res.ok) { if (!holdingsData) holdingsBox.innerHTML = ""; return; } // no portfolio yet
+      holdingsData = await res.json();
+      renderHoldings();
+    } catch { if (!holdingsData) holdingsBox.innerHTML = ""; }
+  }
+
+  // ---------------- boot ----------------
+  (async function boot() {
+    if (!token) return; // show auth view
+    try {
+      const res = await fetch(API_BASE + "/me", { headers: authHeaders() });
+      if (res.ok) {
+        const d = await res.json();
+        userEmail = d.email;
+        enterApp();
+        return;
+      }
+    } catch {}
+    signOutLocal();
+  })();
 </script>
 
 </body>

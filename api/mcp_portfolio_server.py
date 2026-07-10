@@ -1,73 +1,87 @@
 # mcp_portfolio_server.py
 import json
-from typing import Dict, List
+from typing import List
 
-from mcp.server.fastmcp import FastMCP, Context, ToolResult
-from portfolio_core import (
+from mcp.server.fastmcp import FastMCP
+
+from api.portfolio_core import (
     load_price_history,
     compute_portfolio_metrics,
     recommend_portfolio,
+    backtest_vs_benchmark,
 )
 
 server = FastMCP("portfolio-mcp")
 
+
 @server.tool()
 async def mcp_load_price_history(
-    context: Context,
     tickers: List[str],
     start: str,
     end: str,
-) -> ToolResult:
+) -> str:
     """
     Load daily adjusted close prices for given tickers between start and end.
     """
     prices = load_price_history(tickers, start, end)
-    # return as JSON-serializable
-    json_data = prices.to_dict(orient="list")
-    return ToolResult(content=json.dumps(json_data))
+    return json.dumps(prices.to_dict(orient="list"), default=str)
 
 
 @server.tool()
 async def mcp_compute_portfolio_metrics(
-    context: Context,
-    prices_json: str,
-    weights_json: str,
+    tickers: List[str],
+    start: str,
+    end: str,
+    weights_json: str = "",
     benchmark: str = "SPY",
-) -> ToolResult:
+) -> str:
     """
-    Compute CAGR, Sharpe ratio, volatility, and max drawdown.
-    prices_json: JSON from mcp_load_price_history
-    weights_json: mapping {ticker: weight}
+    Compute CAGR, Sharpe ratio, volatility, max drawdown, and a benchmark
+    comparison (vs SPY by default).
+
+    weights_json: optional {ticker: weight} mapping; equal-weight if empty.
     """
-    import pandas as pd
+    metrics = compute_portfolio_metrics(
+        tickers=tickers,
+        start=start,
+        end=end,
+        weights_json=weights_json or None,
+        benchmark=benchmark,
+    )
+    return json.dumps(metrics)
 
-    prices_dict = json.loads(prices_json)
-    prices = pd.DataFrame(prices_dict)
-    weights: Dict[str, float] = json.loads(weights_json)
 
-    metrics = compute_portfolio_metrics(prices, weights, benchmark)
-    return ToolResult(content=json.dumps(metrics))
+@server.tool()
+async def mcp_backtest_vs_benchmark(
+    weights_json: str,
+    start: str,
+    end: str,
+    benchmark: str = "SPY",
+) -> str:
+    """
+    Backtest a {ticker: weight} portfolio against a benchmark index.
+    Returns portfolio/benchmark metrics plus alpha, beta, and excess return.
+    """
+    weights = json.loads(weights_json)
+    result = backtest_vs_benchmark(weights, start, end, benchmark=benchmark)
+    return json.dumps(result)
 
 
 @server.tool()
 async def mcp_recommend_portfolio(
-    context: Context,
-    prices_json: str,
-    constraints_json: str,
-) -> ToolResult:
+    tickers: List[str],
+    start: str,
+    end: str,
+    constraints_json: str = "{}",
+) -> str:
     """
-    Recommend portfolio weights given prices and constraints.
+    Recommend portfolio weights given tickers, a date range, and constraints.
     """
-    import pandas as pd
-
-    prices_dict = json.loads(prices_json)
-    prices = pd.DataFrame(prices_dict)
-    constraints = json.loads(constraints_json)
-
+    prices = load_price_history(tickers, start, end)
+    constraints = json.loads(constraints_json) if constraints_json else {}
     weights = recommend_portfolio(prices, constraints)
-    return ToolResult(content=json.dumps(weights))
+    return json.dumps(weights)
 
 
 if __name__ == "__main__":
-    # This will run a stdio server or HTTP depending on how you configure it
     server.run()

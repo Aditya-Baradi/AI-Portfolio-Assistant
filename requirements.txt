@@ -13,6 +13,31 @@ scipy<1.12
 finrl==0.3.7
 PyPortfolioOpt==1.5.6
 
+# FinRL 0.3.7 runtime deps (not pulled in automatically by its metadata).
+# gymnasium/stable-baselines3/torch power the RL agent; stockstats builds the
+# technical indicators; exchange_calendars/alpaca-trade-api/wrds satisfy FinRL's
+# eager data-source imports (only Yahoo is actually used at runtime).
+gymnasium==0.29.1
+stable-baselines3==2.3.2
+torch==2.2.2
+stockstats==0.6.8
+exchange_calendars
+alpaca-trade-api==3.2.0
+wrds
+# alpaca-trade-api pins websockets<11 but yfinance needs >=12 for websockets.sync
+websockets==13.1
+
+# News sentiment analysis
+vaderSentiment==3.3.2
+# Optional higher-accuracy backend: pip install transformers, then set
+# SENTIMENT_BACKEND=finbert (downloads ProsusAI/finbert, ~440MB, on first use).
+
+# Charts (equity curves in chat)
+matplotlib
+
+# Testing
+pytest
+
 yfinance==0.2.66
 
 openai==1.35.0
@@ -21,6 +46,14 @@ openai==1.35.0
 flask==3.0.0
 flask-cors==4.0.0
 
+# API backend (api/backend.py)
+fastapi
+uvicorn[standard]
+python-multipart
+
+# Auth (password hashing)
+bcrypt
+
 
 streamlit==1.32.0
 
@@ -28,3 +61,4 @@ streamlit==1.32.0
 requests==2.31.0
 python-dotenv==1.0.1
 
+httpx==0.27.2

@@ -42,6 +42,13 @@ api/.env
 # =========================
 chat_memory/
 portfolio.json
+cache/
+charts/
+results/
+.pytest_cache/
+app.db
+app.db-*
+tests/
 
 # =========================
 # Node / frontend (if used later)

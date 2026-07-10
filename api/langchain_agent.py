@@ -13,6 +13,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_community.chat_message_histories import ChatMessageHistory
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
 from langchain_core.messages import ToolMessage
+from api.langchain_tools import finrl_optimize_portfolio
 
 from api.langchain_tools import (
     lc_load_price_history,
@@ -20,7 +21,13 @@ from api.langchain_tools import (
     lc_recommend_portfolio,
     load_user_portfolio,
     compute_total_value,
-    lc_price_on_date_tool,   
+    lc_price_on_date_tool,
+    finrl_optimize_portfolio,
+    portfolio_holdings_count,
+    lc_ticker_sentiment,
+    lc_portfolio_sentiment,
+    lc_backtest_portfolio,
+    lc_sentiment_tilt,
 )
 
 load_dotenv()
@@ -83,6 +90,9 @@ If the user asks about risk, volatility, beta, drawdown, Sharpe, CAGR, performan
 
 - You MUST NOT call lc_load_price_history for metrics.
 - After the tool returns, summarize annualized volatility, Sharpe ratio, CAGR, and max drawdown.
+- The tool result also includes a "benchmark_metrics" and "vs_benchmark" block comparing the
+  portfolio to the S&P 500 (SPY). ALWAYS report this backtest comparison: state whether the
+  portfolio outperformed or underperformed the S&P 500, and cite excess return/CAGR, alpha, and beta.
 - You MUST NOT answer purely in natural language without calling the appropriate tool.
 
 3. RECOMMENDATIONS (UPDATED TOOL SIGNATURE):
@@ -144,6 +154,33 @@ ALWAYS:
 Stay within investing, markets, portfolio analysis.
 Never provide personalized financial advice.
 
+10a. BACKTEST VS S&P 500 (tool: lc_backtest_portfolio):
+- If the user asks to backtest their portfolio, compare it to the market/index/S&P 500,
+  or asks "how did my portfolio do vs the market":
+    - Call lc_backtest_portfolio(session_id, start, end). Dates optional (defaults to last 12 months).
+- The result contains a stock-level block and a sector-level block, each with a
+  benchmark comparison. Summarize both: total return vs SPY, excess return, alpha, beta,
+  Sharpe, and whether it outperformed. Note that results include transaction costs.
+- If chart_url is present, include it on its own line, verbatim (e.g. /charts/abc.png) —
+  the UI renders it as an image.
+- For hypothetical/what-if questions ("what if I sold X and bought Y"), build the modified
+  holdings JSON yourself from the uploaded portfolio and pass it to
+  lc_compute_metrics_from_portfolio to compare before/after metrics.
+
+10b. NEWS SENTIMENT (tools: lc_ticker_sentiment, lc_portfolio_sentiment, lc_sentiment_tilt):
+- If the user wants news/sentiment factored into a recommendation, first get the
+  optimized weights (finrl_optimize_portfolio), then call
+  lc_sentiment_tilt(weights_json=<the final_allocation_weights as JSON>, strength=0.2)
+  and present both the original and sentiment-tilted weights.
+- If the user asks about news, sentiment, "what's the market saying", headlines, or how
+  news might affect a stock or their portfolio:
+    - For a single ticker: call lc_ticker_sentiment(ticker, limit).
+    - For "my portfolio" sentiment: call lc_portfolio_sentiment(session_id).
+- Summarize the Bullish/Neutral/Bearish label and the average score, and cite a few of the
+  most bullish/bearish headlines. Make clear this is news-derived sentiment, not a price target.
+- You MAY combine sentiment with metrics/optimization to give a fuller, better-informed picture,
+  but always frame it as educational, not personalized investment advice.
+
 11. Portfolio File Rule (MANDATORY, REINFORCEMENT):
 If the user has uploaded a portfolio file for the current session:
 
@@ -188,6 +225,12 @@ tools = [
     load_user_portfolio,
     compute_total_value,
     lc_price_on_date_tool,
+    finrl_optimize_portfolio,
+    portfolio_holdings_count,
+    lc_ticker_sentiment,
+    lc_portfolio_sentiment,
+    lc_backtest_portfolio,
+    lc_sentiment_tilt,
 ]
 
 

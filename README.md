@@ -1,135 +1,59 @@
-# AI Portfolio Assistant 
+# AI Portfolio Assistant
 
-An AI-powered helper for **financial analysis**. It recommends diversified portfolios, allocates capital by ticker, and projects expected returns over a chosen horizon. It can also pull **news by ticker via Tiingo** and (optionally) summarize it for context.
+A web app that helps you understand and improve your stock portfolio. Import your holdings, chat with an AI advisor about them, and see live analytics: a 12-month value projection, news sentiment with Buy / Hold / Sell reads per stock, and honest backtests against the S&P 500.
 
-> ⚠️ **Disclaimer:** Educational purposes only. Not investment advice. ⚠️
+> ⚠️ **Disclaimer:** Educational purposes only. Not investment advice.
 
-> 🚧 **Status:** In active development (alpha). Expect breaking changes and incomplete features.
-> 
-This project is a work in progress. APIs and outputs may change. Feedback and PRs are welcome.
----
+## Features
 
-## ✨ Features
+* **Chat advisor** — a LangChain agent (GPT-4o-mini) with tools for portfolio metrics, optimization, backtesting, charting, and news sentiment. Keeps your last 10 chats.
+* **Accounts** — register/login with bcrypt-hashed passwords and token auth; your portfolio and chats persist per user in SQLite.
+* **Portfolio import** — upload a CSV or JSON of your holdings; the app derives weights and live values (yfinance).
+* **Dashboard** — current value, estimated yearly gain, volatility, Sharpe ratio, a 12-month projection chart with a likely range, and a per-stock news check.
+* **News sentiment** — recent headlines per ticker scored with a finance-tuned VADER (optional FinBERT via `SENTIMENT_BACKEND=finbert`), rolled up into Buy / Hold / Sell tags.
+* **Backtesting** — portfolio and sector performance vs the S&P 500 with transaction costs, alpha/beta, and equity-curve charts.
+* **Optimization** — conservative min-volatility blend (validated out-of-sample with a walk-forward harness), max-Sharpe via PyPortfolioOpt, and an optional FinRL (PPO) reinforcement-learning blend.
 
-* **Portfolio construction**: Equal-weight, inverse-volatility, or **PyPortfolioOpt**-based optimization (e.g., Max Sharpe) with position/sector caps.
-* **Capital allocation**: Convert weights → dollar targets with min-trade thresholds and optional fractional-share handling.
-* **Return projections**: Simple CAGR/expected-return projections over user-selected horizons.
-* **News integration (Tiingo)**: Fetch the latest headlines tagged to your tickers; optional LLM summaries.
-* **(Optional) RL engine**: Hooks to **FinRL** + Stable-Baselines3 for research experiments.
-
----
-
-## 🧰 Tech Stack
-
-* **Python** 3.10+
-* **Core**: `pandas`, `numpy`
-* **Optimization**: `PyPortfolioOpt` (`pypfopt`)
-* **News**: `tiingo` (News API)
-* **(Optional) RL**: `finrl`, `stable-baselines3`
-* **(Optional) LLM**: OpenAI
-
----
-
-## 🗂️ Data Sources
-
-* **Prices**: Prices are found using YFinance as well as parsing through your portfolio if avaiable on it
-* **News**: **Tiingo News API** (requires API key). Only the news endpoint is used by default.
-
----
-
-## 🚀 Getting Started
-
-### 1) Install
+## Getting started
 
 ```bash
+python -m venv venv
+venv\Scripts\activate           # Windows
 pip install -r requirements.txt
 ```
 
-Minimal `requirements.txt` example:
+Create a `.env` in the project root:
 
 ```text
-pandas
-numpy
-pypfopt
-tiingo
-requests
-matplotlib
-# optional
-finrl
-stable-baselines3
-gymnasium<1.0
+OPENAI_API_KEY=sk-...
 ```
 
-### 2) Configure environment
-
-Create a `.env` or set environment variables:
+Run the app (serves both the API and the web page):
 
 ```bash
-# Windows (PowerShell)
-setx TIINGO_API_KEY "YOUR_KEY"
-# macOS/Linux (bash)
-export TIINGO_API_KEY="YOUR_KEY"
+uvicorn api.backend:app --port 8000
 ```
 
-## ⚙️ Configuration
+Then open http://127.0.0.1:8000, create an account, and import your portfolio file.
 
-Create a `config.yaml` (or `.env`) to tweak behavior:
-
-```yaml
-# weights & thresholds
-max_weight_per_name: 0.13     # 13% cap per ticker
-min_trade_dollars: 5.0        # drop tiny trades
-
-# sector comparison
-underweight_threshold_pp: 0.5  # percentage points; 0.5 == 0.5%
-weights_in_percent: true
-
-# news
-news_days: 7
-news_top_n: 25
-```
-
----
-
-## 🧪 Project Structure
+## Project structure
 
 ```
-.
-├─ src/
-│  └─ ai_portfolio/
-│     ├─ optimizers.py         # PyPortfolioOpt helpers
-│     ├─ allocation.py         # dollars ↔ weights utilities
-│     ├─ news.py               # Tiingo news wrappers
-│     ├─ config.py             # pydantic settings
-│     └─ __init__.py
-├─ notebooks/
-│  └─ 01_quickstart.ipynb
-├─ examples/
-│  └─ news_demo.py
-├─ requirements.txt
-├─ README.md
-└─ LICENSE
+api/
+├─ backend.py            # FastAPI app: auth, chat, upload, projection, sentiment
+├─ index.html            # Web UI (served by the backend at /)
+├─ db.py                 # SQLite: users, tokens, portfolios, chats
+├─ langchain_agent.py    # Chat agent setup and system prompt
+├─ langchain_tools.py    # Agent tools (metrics, backtest, optimize, sentiment...)
+├─ portfolio_core.py     # Parsing, weights, metrics, backtest engine
+├─ predict_agent.py      # Optimizers: min-vol blend, max-Sharpe, FinRL PPO
+├─ sentiment.py          # Headline fetching + scoring, Buy/Hold/Sell signals
+├─ data_cache.py         # Disk caches for prices, sectors, splits
+├─ charting.py           # Equity-curve PNGs for backtests
+├─ backtest_vs_sp500.py  # Walk-forward research harness
+└─ mcp_portfolio_server.py
 ```
 
----
+## Tech stack
 
-## 🔌 Optional: FinRL integration
-
-If you enable RL experiments, install `finrl`, `stable-baselines3`. Expect version differences across FinRL releases; a small import shim is included in `src/ai_portfolio/rl_shim.py`.
-
----
-
-## 🗺️ Roadmap
-
-* [ ] Add FastAPI endpoint for on-demand allocation & news
-* [ ] Per-sector caps & exposure checks
-* [ ] Caching layer for news & prices
-* [ ] CLI commands (e.g., `ai-portfolio optimize --tickers ...`)
-
----
-
-## 🙌 Acknowledgments
-
-* PyPortfolioOpt for efficient frontier tools
-* Tiingo for News API access
-* FinRL for RL finance research utilities
+Python 3.11 · FastAPI · LangChain + OpenAI · yfinance · PyPortfolioOpt · FinRL + Stable-Baselines3 · vaderSentiment · SQLite · matplotlib
