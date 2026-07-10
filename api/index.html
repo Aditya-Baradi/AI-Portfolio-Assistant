@@ -119,7 +119,23 @@
       border-bottom: 1px solid var(--line-strong);
       flex: none;
     }
-    .brand { display: flex; align-items: baseline; gap: 11px; }
+    .brand { display: flex; align-items: baseline; gap: 11px; flex: 1; }
+    .nav-tabs { display: flex; gap: 4px; }
+    .nav-tab {
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--muted);
+      border-radius: 8px;
+      padding: 7px 18px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .nav-tab.active {
+      background: var(--ink);
+      border-color: var(--ink);
+      color: #f4f1ea;
+    }
     .mark {
       width: 10px; height: 10px;
       background: var(--accent);
@@ -145,7 +161,9 @@
     .account {
       display: flex;
       align-items: center;
+      justify-content: flex-end;
       gap: 10px;
+      flex: 1;
     }
     .account-email {
       font-family: var(--mono);
@@ -168,6 +186,64 @@
       align-items: stretch;
       flex: 1;
       min-height: 0;   /* lets the chat column shrink to the viewport */
+    }
+    .layout.hidden { display: none; }
+
+    /* ---------- Stocks page ---------- */
+    .stocks-page {
+      display: none;
+      flex-direction: column;
+      gap: 14px;
+      flex: 1;
+      min-height: 0;
+    }
+    .stocks-page.active { display: flex; }
+    .stocks-bar { display: flex; gap: 10px; align-items: center; }
+    .stocks-bar input {
+      border: 1px solid var(--line-strong);
+      border-radius: 9px;
+      padding: 9px 12px;
+      font-size: 0.86rem;
+      width: 220px;
+      background: var(--surface);
+      outline: none;
+      text-transform: uppercase;
+    }
+    .stocks-bar input:focus { border-color: var(--accent); }
+    .stocks-hint { font-size: 0.72rem; color: var(--muted); margin-left: auto; }
+    .stocks-err { font-size: 0.76rem; color: var(--danger); }
+    .stocks-scroll {
+      overflow-y: auto;
+      min-height: 0;
+      flex: 1;
+      scrollbar-width: thin;
+      scrollbar-color: var(--line-strong) transparent;
+    }
+    .stocks-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 14px;
+      padding-bottom: 8px;
+    }
+    .stock-card {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      padding: 14px 16px;
+    }
+    .stock-card.hit { border-color: var(--accent); }
+    .stock-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 2px; }
+    .stock-tick { font-weight: 700; font-size: 0.95rem; }
+    .stock-price { font-family: var(--mono); font-size: 0.8rem; color: var(--muted); }
+    .stock-range { font-size: 0.74rem; color: var(--muted); line-height: 1.5; margin-bottom: 6px; }
+    .stock-range b { color: var(--ink); font-weight: 650; }
+    .stocks-empty {
+      color: var(--muted);
+      font-size: 0.85rem;
+      padding: 34px 10px;
+      text-align: center;
+      grid-column: 1 / -1;
     }
     .chat-col {
       display: flex;
@@ -444,12 +520,40 @@
       max-height: 100%;
       overflow-y: auto;
     }
+    .panel-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--line);
+    }
     .panel-title {
       font-family: var(--serif);
       font-size: 1.02rem;
       font-weight: 600;
-      padding-bottom: 10px;
-      border-bottom: 1px solid var(--line);
+    }
+    .mini-tabs { display: flex; gap: 3px; }
+    .mini-tab {
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+      color: var(--muted);
+      border-radius: 6px;
+      padding: 3px 9px;
+      font-size: 0.68rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .mini-tab.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #f4f1ea;
+    }
+    .legend { display: flex; gap: 12px; font-size: 0.66rem; color: var(--muted); margin-top: 6px; }
+    .legend .dot {
+      display: inline-block;
+      width: 8px; height: 8px;
+      border-radius: 2px;
+      margin-right: 4px;
     }
     .panel-empty {
       color: var(--muted);
@@ -529,6 +633,39 @@
       font-size: 0.76rem;
       color: var(--muted);
     }
+    .h-del {
+      border: none;
+      background: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 0.78rem;
+      padding: 0 0 0 2px;
+      line-height: 1;
+    }
+    .h-del:hover { color: var(--danger); }
+    .add-row {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      padding: 7px 10px;
+      border-bottom: 1px solid var(--line);
+    }
+    .add-row input {
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      padding: 4px 6px;
+      font-size: 0.74rem;
+      min-width: 0;
+      outline: none;
+      background: transparent;
+    }
+    .add-row input:focus { border-color: var(--accent); }
+    .add-err {
+      color: var(--danger);
+      font-size: 0.68rem;
+      padding: 4px 10px 6px;
+      border-bottom: 1px solid var(--line);
+    }
     .panel-note {
       font-size: 0.68rem;
       color: var(--muted);
@@ -587,6 +724,10 @@
         <span class="mark" aria-hidden="true"></span>
         <h1 class="title">Portfolio Assistant</h1>
       </div>
+      <nav class="nav-tabs" aria-label="Pages">
+        <button type="button" class="nav-tab active" data-page="chat">Chat</button>
+        <button type="button" class="nav-tab" data-page="stocks">Stocks</button>
+      </nav>
       <div class="account">
         <span class="account-email" id="accountEmail"></span>
         <button class="btn-quiet" id="logoutBtn" type="button">Sign out</button>
@@ -622,7 +763,13 @@
       </div>
 
       <aside class="panel" id="portfolioPanel">
-        <div class="panel-title">Your portfolio</div>
+        <div class="panel-head">
+          <div class="panel-title">Your portfolio</div>
+          <div class="mini-tabs" id="panelTabs" style="display:none">
+            <button type="button" class="mini-tab active" data-view="outlook">Outlook</button>
+            <button type="button" class="mini-tab" data-view="whatif">What if?</button>
+          </div>
+        </div>
         <div id="projBox">
           <div class="panel-empty">
             Import your portfolio to see what it's worth today and where it could go over the next year.
@@ -630,6 +777,19 @@
         </div>
         <div id="holdingsBox"></div>
       </aside>
+    </div>
+
+    <!-- ================= Stocks page ================= -->
+    <div class="stocks-page" id="stocksPage">
+      <div class="stocks-bar">
+        <input id="stockSearch" placeholder="Type any ticker, e.g. AMD" maxlength="10" autocomplete="off" />
+        <button class="btn-primary" id="stockSearchBtn" type="button">Look up</button>
+        <span class="stocks-err" id="stockSearchErr"></span>
+        <span class="stocks-hint">Estimated price ranges for the next 12 months, based on the last 3 years. Estimates, not guarantees.</span>
+      </div>
+      <div class="stocks-scroll">
+        <div class="stocks-grid" id="stocksGrid"></div>
+      </div>
     </div>
 
     <p class="disclaimer">For learning only. Not investment advice.</p>
@@ -968,8 +1128,7 @@
       let data;
       try { data = JSON.parse(raw); } catch { data = { message: raw }; }
       addMessage("assistant", data.message ?? "File received.");
-      loadProjection();
-      loadHoldings();
+      refreshPortfolio();
     } catch (err) {
       addMessage("assistant", `Upload failed: ${err?.message || err}`);
     } finally {
@@ -993,9 +1152,13 @@
     return d.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
   }
 
-  function projChartSVG(d) {
+  function projChartSVG(d, fmt = money) {
     const W = 288, H = 168, L = 8, R = 64, T = 10, B = 22;
     const iw = W - L - R, ih = H - T - B;
+    // Green when the most-likely path points up, red when it points down.
+    const down = d.median[d.median.length - 1] < d.median[0];
+    const lineCol = down ? "#8c3b2e" : "#177a53";
+    const bandCol = down ? "rgba(140,59,46,0.10)" : "rgba(23,122,83,0.10)";
     const lo = Math.min(...d.pessimistic), hi = Math.max(...d.optimistic);
     const pad = (hi - lo) * 0.06;
     const y0 = lo - pad, y1 = hi + pad;
@@ -1023,16 +1186,16 @@
       <svg class="proj-chart" viewBox="0 0 ${W} ${H}" role="img"
            aria-label="Projected portfolio value over 12 months with optimistic and pessimistic bands">
         ${grid}
-        <path d="M${band} Z" fill="rgba(23,122,83,0.10)" stroke="none"/>
-        <polyline points="${pts(d.median)}" fill="none" stroke="#177a53" stroke-width="2"
+        <path d="M${band} Z" fill="${bandCol}" stroke="none"/>
+        <polyline points="${pts(d.median)}" fill="none" stroke="${lineCol}" stroke-width="2"
                   stroke-linecap="round" stroke-linejoin="round"/>
-        <circle cx="${X(0).toFixed(1)}" cy="${Y(d.median[0]).toFixed(1)}" r="2.6" fill="#177a53"/>
+        <circle cx="${X(0).toFixed(1)}" cy="${Y(d.median[0]).toFixed(1)}" r="2.6" fill="${lineCol}"/>
         <text x="${lblX}" y="${(Y(d.optimistic[last]) + 3).toFixed(1)}" font-size="8.4" fill="#6f6a60"
-              font-family="ui-monospace,Consolas,monospace">${money(d.optimistic[last])}</text>
-        <text x="${lblX}" y="${(Y(d.median[last]) + 3).toFixed(1)}" font-size="8.8" font-weight="700" fill="#177a53"
-              font-family="ui-monospace,Consolas,monospace">${money(d.median[last])}</text>
+              font-family="ui-monospace,Consolas,monospace">${fmt(d.optimistic[last])}</text>
+        <text x="${lblX}" y="${(Y(d.median[last]) + 3).toFixed(1)}" font-size="8.8" font-weight="700" fill="${lineCol}"
+              font-family="ui-monospace,Consolas,monospace">${fmt(d.median[last])}</text>
         <text x="${lblX}" y="${(Y(d.pessimistic[last]) + 3).toFixed(1)}" font-size="8.4" fill="#6f6a60"
-              font-family="ui-monospace,Consolas,monospace">${money(d.pessimistic[last])}</text>
+              font-family="ui-monospace,Consolas,monospace">${fmt(d.pessimistic[last])}</text>
         <text x="${L}" y="${H - 6}" font-size="8.4" fill="#6f6a60">Now</text>
         <text x="${(L + iw / 2 - 10).toFixed(1)}" y="${H - 6}" font-size="8.4" fill="#6f6a60">+6 mo</text>
         <text x="${(L + iw - 22).toFixed(1)}" y="${H - 6}" font-size="8.4" fill="#6f6a60">+1 yr</text>
@@ -1066,12 +1229,217 @@
     try {
       const res = await api("/portfolio/projection", { headers: authHeaders() });
       if (!res.ok) return; // no portfolio yet -> keep the empty state
-      renderPanel(await res.json());
+      projData = await res.json();
+      panelTabs.style.display = "flex";
+      if (panelView === "outlook") renderPanel(projData);
     } catch {}
   }
 
+  // ---------------- what-if comparison (Outlook / What if? tabs) ----------------
+  const panelTabs = document.getElementById("panelTabs");
+  let panelView = "outlook";
+  let projData = null;
+  let whatifData = null;
+
+  for (const b of panelTabs.querySelectorAll(".mini-tab")) {
+    b.addEventListener("click", () => setPanelView(b.dataset.view));
+  }
+
+  function setPanelView(v) {
+    panelView = v;
+    for (const b of panelTabs.querySelectorAll(".mini-tab")) {
+      b.classList.toggle("active", b.dataset.view === v);
+    }
+    if (v === "outlook") {
+      if (projData) renderPanel(projData);
+    } else {
+      loadWhatIf();
+    }
+  }
+
+  async function loadWhatIf() {
+    if (whatifData) { drawWhatIf(); return; }
+    projBox.innerHTML = '<div class="panel-empty">Comparing a year of prices… this can take a moment.</div>';
+    try {
+      const res = await api("/portfolio/whatif", { headers: authHeaders() });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        projBox.innerHTML = `<div class="panel-empty">${d.detail || "Comparison unavailable right now."}</div>`;
+        return;
+      }
+      whatifData = await res.json();
+      if (panelView === "whatif") drawWhatIf();
+    } catch {
+      projBox.innerHTML = '<div class="panel-empty">Comparison unavailable right now.</div>';
+    }
+  }
+
+  function whatIfChartSVG(d) {
+    const W = 320, H = 110, L = 6, R = 6, T = 8, B = 16;
+    const series = [
+      { vals: d.curves.benchmark, color: "#8a8378", w: 1.4 },
+      { vals: d.curves.current, color: "#201f1b", w: 1.6 },
+      { vals: d.curves.optimized, color: "#177a53", w: 2 },
+    ];
+    const all = series.flatMap((s) => s.vals);
+    const lo = Math.min(...all), hi = Math.max(...all);
+    const span = hi - lo || 1;
+    const n = d.dates.length;
+    const X = (i) => L + (W - L - R) * (n > 1 ? i / (n - 1) : 0);
+    const Y = (v) => T + (H - T - B) * (1 - (v - lo) / span);
+    const lines = series.map((s) => {
+      const pts = s.vals.map((v, i) => `${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(" ");
+      return `<polyline points="${pts}" fill="none" stroke="${s.color}" stroke-width="${s.w}"
+               stroke-linejoin="round" stroke-linecap="round"/>`;
+    }).join("");
+    return `
+      <svg class="proj-chart" viewBox="0 0 ${W} ${H}" role="img"
+           aria-label="Growth of $1: your mix vs the suggested mix vs the S&amp;P 500">
+        <line x1="${L}" y1="${Y(1).toFixed(1)}" x2="${W - R}" y2="${Y(1).toFixed(1)}"
+              stroke="#dcd7cb" stroke-width="1" stroke-dasharray="3 3"/>
+        ${lines}
+        <text x="${L}" y="${H - 4}" font-size="8.4" fill="#6f6a60">1 year ago</text>
+        <text x="${W - R - 22}" y="${H - 4}" font-size="8.4" fill="#6f6a60">now</text>
+      </svg>`;
+  }
+
+  function drawWhatIf() {
+    const d = whatifData;
+    const pct = (x) => `${x >= 0 ? "+" : ""}${(x * 100).toFixed(1)}%`;
+    const cls = (x) => (x >= 0 ? "pos" : "neg");
+    const topW = Object.entries(d.optimized_weights).slice(0, 4)
+      .map(([t, w]) => `${t} ${(w * 100).toFixed(0)}%`).join(", ");
+    projBox.innerHTML = `
+      <div class="tiles" style="grid-template-columns:repeat(3,1fr)">
+        <div class="tile"><div class="k">You</div><div class="v ${cls(d.returns.current)}">${pct(d.returns.current)}</div></div>
+        <div class="tile"><div class="k">Suggested</div><div class="v ${cls(d.returns.optimized)}">${pct(d.returns.optimized)}</div></div>
+        <div class="tile"><div class="k">S&amp;P 500</div><div class="v ${cls(d.returns.benchmark)}">${pct(d.returns.benchmark)}</div></div>
+      </div>
+      <div class="chart-head" style="margin-top:12px">
+        <span class="chart-title">Last 12 months</span>
+        <span class="chart-sub">growth of $1</span>
+      </div>
+      ${whatIfChartSVG(d)}
+      <div class="legend">
+        <span><span class="dot" style="background:#201f1b"></span>Your mix</span>
+        <span><span class="dot" style="background:#177a53"></span>Suggested mix</span>
+        <span><span class="dot" style="background:#8a8378"></span>S&amp;P 500</span>
+      </div>
+      <div class="panel-note">
+        The suggested mix spreads your money more evenly across the same stocks
+        (biggest pieces: ${topW}). It was built with older data, then both mixes
+        were measured on the past year, which it never saw. Past results don't
+        guarantee future ones.
+      </div>`;
+  }
+
+  function refreshPortfolio() {
+    whatifData = null;
+    stocksLoaded = false;
+    loadHoldings();
+    loadProjection();
+    if (panelView === "whatif") loadWhatIf();
+    if (stocksPage.classList.contains("active")) loadStockCards();
+  }
+
+  // ---------------- page navigation (Chat / Stocks) ----------------
+  const chatPage = document.querySelector(".layout");
+  const stocksPage = document.getElementById("stocksPage");
+  const stocksGrid = document.getElementById("stocksGrid");
+  const stockSearch = document.getElementById("stockSearch");
+  const stockSearchBtn = document.getElementById("stockSearchBtn");
+  const stockSearchErr = document.getElementById("stockSearchErr");
+  let stocksLoaded = false;
+
+  for (const b of document.querySelectorAll(".nav-tab")) {
+    b.addEventListener("click", () => showPage(b.dataset.page));
+  }
+
+  function showPage(p) {
+    for (const b of document.querySelectorAll(".nav-tab")) {
+      b.classList.toggle("active", b.dataset.page === p);
+    }
+    chatPage.classList.toggle("hidden", p !== "chat");
+    stocksPage.classList.toggle("active", p === "stocks");
+    if (p === "stocks" && !stocksLoaded) loadStockCards();
+  }
+
+  function fmtPrice(v) {
+    return v >= 1000 ? money(v) : "$" + Number(v).toFixed(2);
+  }
+
+  function stockCard(d, hit = false) {
+    const last = d.months.length - 1;
+    const down = d.median[last] < d.median[0];
+    const medCol = down ? "var(--danger)" : "#177a53";
+    return `<div class="stock-card${hit ? " hit" : ""}" data-ticker="${d.ticker}">
+      <div class="stock-head">
+        <span class="stock-tick">${d.ticker}</span>
+        <span class="stock-price">${fmtPrice(d.price)} now</span>
+      </div>
+      <div class="stock-range">
+        In 12 months: roughly <b>${fmtPrice(d.pessimistic[last])}</b> to
+        <b>${fmtPrice(d.optimistic[last])}</b>, most likely
+        ${down ? "down, around" : "around"} <b style="color:${medCol}">${fmtPrice(d.median[last])}</b>.
+      </div>
+      ${projChartSVG(d, fmtPrice)}
+    </div>`;
+  }
+
+  async function loadStockCards() {
+    stocksGrid.innerHTML = '<div class="stocks-empty">Working out estimated ranges…</div>';
+    try {
+      const res = await api("/stocks/projections", { headers: authHeaders() });
+      if (!res.ok) {
+        stocksGrid.innerHTML = '<div class="stocks-empty">Import your portfolio and your stocks will show up here. You can still look up any ticker above.</div>';
+        stocksLoaded = true;
+        return;
+      }
+      const d = await res.json();
+      stocksGrid.innerHTML = d.stocks.map((x) => stockCard(x)).join("")
+        || '<div class="stocks-empty">No stocks yet. Look one up above.</div>';
+      stocksLoaded = true;
+    } catch {
+      stocksGrid.innerHTML = '<div class="stocks-empty">Could not load estimates right now.</div>';
+    }
+  }
+
+  async function searchStock() {
+    const t = stockSearch.value.trim().toUpperCase();
+    if (!t) return;
+    stockSearchErr.textContent = "";
+    stockSearchBtn.disabled = true;
+    stockSearchBtn.textContent = "Looking…";
+    try {
+      const res = await api(`/stocks/projection/${encodeURIComponent(t)}`, { headers: authHeaders() });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        stockSearchErr.textContent = d.detail || `Couldn't find '${t}'.`;
+        return;
+      }
+      const old = stocksGrid.querySelector(`.stock-card[data-ticker="${d.ticker}"]`);
+      if (old) old.remove();
+      const empty = stocksGrid.querySelector(".stocks-empty");
+      if (empty) empty.remove();
+      for (const c of stocksGrid.querySelectorAll(".stock-card.hit")) c.classList.remove("hit");
+      stocksGrid.insertAdjacentHTML("afterbegin", stockCard(d, true));
+      stocksGrid.parentElement.scrollTop = 0;
+      stockSearch.value = "";
+    } catch {
+      stockSearchErr.textContent = "Could not reach the server.";
+    } finally {
+      stockSearchBtn.disabled = false;
+      stockSearchBtn.textContent = "Look up";
+    }
+  }
+
+  stockSearchBtn.addEventListener("click", searchStock);
+  stockSearch.addEventListener("keydown", (e) => { if (e.key === "Enter") searchStock(); });
+
   // ---------------- holdings news-sentiment list ----------------
   let holdingsData = null;
+  let addingHolding = false;
+  let addErr = "";
 
   function renderHoldings() {
     if (!holdingsData) return;
@@ -1088,21 +1456,94 @@
         <span class="h-val">${money(h.value)}</span>
         <span class="h-score ${cls}">${scoreLabel}</span>
         <span class="h-sig ${sig}">${h.signal.toUpperCase()}</span>
+        <button type="button" class="h-del" data-t="${h.ticker}" title="Remove ${h.ticker} from your portfolio">✕</button>
       </div>`;
     }).join("");
+
+    const addForm = addingHolding ? `
+      <div class="add-row">
+        <input id="addTicker" placeholder="Ticker" maxlength="10" style="width:62px">
+        <input id="addShares" type="number" placeholder="Shares" min="0" step="any" style="width:76px">
+        <input id="addCost" type="number" placeholder="Avg cost $" min="0" step="any" style="flex:1">
+        <button type="button" class="mini-tab active" id="addConfirm">Add</button>
+      </div>${addErr ? `<div class="add-err">${addErr}</div>` : ""}` : "";
 
     holdingsBox.innerHTML = `
       <div class="chart-head" style="margin-bottom:8px">
         <span class="chart-title">Your stocks in the news</span>
-        <span class="chart-sub">as of ${friendlyDate(holdingsData.as_of)}</span>
+        <span style="display:flex;gap:8px;align-items:center">
+          <span class="chart-sub">as of ${friendlyDate(holdingsData.as_of)}</span>
+          <button type="button" class="mini-tab" id="addToggle">${addingHolding ? "Close" : "+ Add"}</button>
+        </span>
       </div>
-      <div class="holdings-list">${rows}</div>
+      <div class="holdings-list">${addForm}${rows}</div>
       <div class="panel-note" style="border-top:none;padding-top:8px">
         The score shows how positive the recent news is about each stock,
         from &minus;1 (bad news) to +1 (good news).
         The <b>Buy&nbsp;/&nbsp;Sell</b> tag follows the news mood.
         Use it as a starting point, not as advice.
       </div>`;
+
+    document.getElementById("addToggle").addEventListener("click", () => {
+      addingHolding = !addingHolding;
+      addErr = "";
+      renderHoldings();
+      if (addingHolding) document.getElementById("addTicker").focus();
+    });
+    if (addingHolding) {
+      document.getElementById("addConfirm").addEventListener("click", submitHolding);
+      for (const id of ["addTicker", "addShares", "addCost"]) {
+        document.getElementById(id).addEventListener("keydown", (e) => {
+          if (e.key === "Enter") submitHolding();
+        });
+      }
+    }
+    for (const b of holdingsBox.querySelectorAll(".h-del")) {
+      b.addEventListener("click", () => removeHolding(b.dataset.t));
+    }
+  }
+
+  async function submitHolding() {
+    const ticker = document.getElementById("addTicker").value.trim().toUpperCase();
+    const shares = parseFloat(document.getElementById("addShares").value);
+    const cost = parseFloat(document.getElementById("addCost").value);
+    if (!ticker || !shares || shares <= 0) {
+      addErr = "Enter a ticker and how many shares you own.";
+      renderHoldings();
+      return;
+    }
+    const body = { ticker, shares };
+    if (cost && cost > 0) body.avg_cost = cost;
+    try {
+      const res = await api("/portfolio/holding", {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        addErr = d.detail || "Could not add that stock.";
+        renderHoldings();
+        return;
+      }
+      addingHolding = false;
+      addErr = "";
+      refreshPortfolio();
+    } catch {
+      addErr = "Could not reach the server.";
+      renderHoldings();
+    }
+  }
+
+  async function removeHolding(ticker) {
+    if (!confirm(`Remove ${ticker} from your portfolio?`)) return;
+    try {
+      const res = await api(`/portfolio/holding/${ticker}`, {
+        method: "DELETE",
+        headers: authHeaders(),
+      });
+      if (res.ok) refreshPortfolio();
+    } catch {}
   }
 
   async function loadHoldings() {

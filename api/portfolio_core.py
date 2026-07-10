@@ -336,6 +336,156 @@ def parse_portfolio_file(filename: str, content: bytes) -> Dict:
 
 
 # ---------------------------------------------------------------------------
+# Transaction-history imports (brokerage activity exports, not snapshots)
+# ---------------------------------------------------------------------------
+
+def extract_raw_rows(filename: str, content: bytes):
+    """Raw row dicts from a CSV/JSON upload, before any interpretation."""
+    name = filename.lower()
+    try:
+        if name.endswith(".csv"):
+            df = pd.read_csv(io.BytesIO(content))
+            # object dtype so NaN cells really become None (floats can't hold None)
+            return df.astype(object).where(pd.notna(df), None).to_dict("records")
+        if name.endswith(".json"):
+            raw = json.loads(content.decode("utf-8"))
+            if isinstance(raw, dict):
+                for key in ("holdings", "portfolio", "positions", "data",
+                            "transactions", "activity", "history"):
+                    if isinstance(raw.get(key), list):
+                        raw = raw[key]
+                        break
+            if isinstance(raw, list):
+                return [r for r in raw if isinstance(r, dict)]
+    except Exception:
+        return None
+    return None
+
+
+def _txn_fields(row: Dict):
+    """Normalize one raw row into (ticker, date, shares, price, amount)."""
+    lowered = {str(k).strip().lower(): v for k, v in row.items()}
+
+    def pick(*keys):
+        for k in keys:
+            v = lowered.get(k)
+            if v is not None and str(v).strip() != "":
+                return v
+        return None
+
+    def num(v):
+        try:
+            f = float(v)
+            return f if f == f else None  # filters NaN
+        except Exception:
+            return None
+
+    tkr = pick("ticker", "symbol", "tic")
+    ticker = str(tkr).strip().upper() if tkr else None
+    date = pick("date", "trade_date", "transaction_date", "purchase_date")
+    date = str(date).strip()[:10] if date else None
+    shares = num(pick("volume", "shares", "quantity", "qty"))
+    price = num(pick("close", "price", "last_price"))
+    amount = num(pick("current_dollars", "amount", "value", "total_value"))
+    return ticker, date, shares, price, amount
+
+
+def looks_like_transactions(rows) -> bool:
+    """
+    Heuristic check for activity/transaction exports (vs. holdings snapshots).
+
+    Snapshots list each ticker once, on a single date, with positive values.
+    Activity exports have negative amounts (sells) or the same ticker showing
+    up across several dates.
+    """
+    if not rows or len(rows) < 2:
+        return False
+    tickers, dates, negatives = [], set(), 0
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        t, d, _shares, _price, amount = _txn_fields(r)
+        if not t:
+            continue
+        tickers.append(t)
+        if d:
+            dates.add(d)
+        if amount is not None and amount < 0:
+            negatives += 1
+    if not tickers:
+        return False
+    if negatives:
+        return True
+    return len(dates) > 1 and len(tickers) > len(set(tickers))
+
+
+def replay_transactions(rows) -> Dict:
+    """
+    Replay trades in date order to reconstruct positions and true average cost.
+
+    Row classification:
+      - shares + price            -> trade (a negative dollar amount = sell)
+      - shares + amount, no price -> trade at |amount| / shares
+      - amount only               -> cash event (dividend/interest); ignored
+      - shares only               -> unusable (no price); reported as skipped
+    Sells reduce the position using the average-cost method.
+    """
+    events = []
+    cash_events = 0
+    skipped = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        ticker, date, shares, price, amount = _txn_fields(r)
+        if not ticker:
+            continue
+        if shares and not price and amount:
+            price = abs(amount) / shares
+        if shares and price and shares > 0 and price > 0:
+            side = "sell" if (amount is not None and amount < 0) else "buy"
+            events.append((date or "", ticker, side, float(shares), float(price)))
+        elif amount is not None:
+            cash_events += 1
+        else:
+            skipped.append(ticker)
+
+    events.sort(key=lambda e: e[0])
+
+    pos: Dict[str, Dict] = {}
+    for date, ticker, side, shares, price in events:
+        p = pos.setdefault(ticker, {"shares": 0.0, "cost": 0.0, "first_buy": None})
+        if side == "buy":
+            p["shares"] += shares
+            p["cost"] += shares * price
+            if p["first_buy"] is None:
+                p["first_buy"] = date or None
+        else:
+            if shares >= p["shares"] - 1e-9:
+                p["shares"], p["cost"] = 0.0, 0.0  # position fully closed
+            else:
+                p["cost"] *= 1.0 - shares / p["shares"]
+                p["shares"] -= shares
+
+    positions = {}
+    for t, p in pos.items():
+        if p["shares"] > 1e-9 and p["cost"] > 0:
+            positions[t] = {
+                "shares": round(p["shares"], 6),
+                "avg_cost": round(p["cost"] / p["shares"], 4),
+                "first_buy": p["first_buy"],
+            }
+
+    return {
+        "positions": positions,
+        "n_trades": len(events),
+        "n_cash_events": cash_events,
+        "skipped_tickers": sorted(set(skipped)),
+        "closed_tickers": sorted(t for t, p in pos.items()
+                                 if p["shares"] <= 1e-9 and t not in positions),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Backtesting / benchmark comparison engine
 # ---------------------------------------------------------------------------
 
