@@ -1,0 +1,27 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env            # OPENAI_API_KEY lives here; never commit it
+    volumes:
+      - appdata:/app          # keeps app.db, cache/, charts/, chat_memory/
+    expose:
+      - "8000"
+
+  # HTTPS in ~3 lines: Caddy fetches and renews Let's Encrypt certificates
+  # automatically once DOMAIN points at this machine.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+
+volumes:
+  appdata:
+  caddydata:

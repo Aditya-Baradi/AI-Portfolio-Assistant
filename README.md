@@ -1,4 +1,4 @@
-# AI Portfolio Assistant
+# Evergreen — AI Portfolio Assistant
 
 A web app that helps you understand and improve your stock portfolio. Import your holdings, chat with an AI advisor about them, and see live analytics: a 12-month value projection, news sentiment with Buy / Hold / Sell reads per stock, and honest backtests against the S&P 500.
 
@@ -6,11 +6,13 @@ A web app that helps you understand and improve your stock portfolio. Import you
 
 ## Features
 
-* **Chat advisor** — a LangChain agent (GPT-4o-mini) with tools for portfolio metrics, optimization, backtesting, charting, and news sentiment. Keeps your last 10 chats.
-* **Accounts** — register/login with bcrypt-hashed passwords and token auth; your portfolio and chats persist per user in SQLite.
-* **Portfolio import** — upload a CSV or JSON of your holdings; the app derives weights and live values (yfinance).
-* **Dashboard** — current value, estimated yearly gain, volatility, Sharpe ratio, a 12-month projection chart with a likely range, and a per-stock news check.
-* **News sentiment** — recent headlines per ticker scored with a finance-tuned VADER (optional FinBERT via `SENTIMENT_BACKEND=finbert`), rolled up into Buy / Hold / Sell tags.
+* **Chat advisor** — a LangChain agent (GPT-4o-mini) with tools for portfolio metrics, optimization, backtesting, charting, and news sentiment. Keeps your last 10 chats; 50 messages/day per user.
+* **Accounts & security** — bcrypt-hashed passwords, SHA-256-hashed session tokens, optional two-factor sign-in (TOTP), login rate limiting, security headers, an activity log, data export, and account deletion.
+* **Portfolio import** — holdings snapshots (CSV/JSON) or brokerage transaction histories, which are replayed to recover your true cost basis. Add/remove holdings in the UI.
+* **Dashboard** — live value, 12-month outlook, what-if comparison vs an optimized mix (with a concrete trade list), diversification breakdown with concentration warnings, per-stock news sentiment with Buy/Hold/Sell tags and clickable headlines, and dividend income.
+* **Stocks page** — 12-month estimated price ranges for every holding, a watchlist (star any ticker), lookup of any symbol, and your real performance history vs the S&P 500.
+* **Plan page** — years to retirement, risk comfort, volatility limit, goal: a Monte Carlo retirement outlook, the probability of hitting your goal amount, the monthly contribution that would make it likely, and stocks screened to fit your risk profile.
+* **Alerts** — a bell that warns when your portfolio drops sharply or a holding's news turns negative.
 * **Backtesting** — portfolio and sector performance vs the S&P 500 with transaction costs, alpha/beta, and equity-curve charts.
 * **Optimization** — conservative min-volatility blend (validated out-of-sample with a walk-forward harness), max-Sharpe via PyPortfolioOpt, and an optional FinRL (PPO) reinforcement-learning blend.
 
@@ -53,6 +55,17 @@ api/
 ├─ backtest_vs_sp500.py  # Walk-forward research harness
 └─ mcp_portfolio_server.py
 ```
+
+## Deployment (Docker + HTTPS)
+
+```bash
+DOMAIN=yourdomain.com docker compose up -d
+```
+
+The compose file runs the app plus a Caddy reverse proxy that fetches and
+renews HTTPS certificates automatically once `DOMAIN` points at the machine.
+Data (accounts, caches) lives in the `appdata` volume. For local-only use,
+skip Docker and run uvicorn directly.
 
 ## Tech stack
 

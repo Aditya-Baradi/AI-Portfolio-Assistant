@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Syntax-check every Python file without installing the heavy deps.
+      - name: Compile check
+        run: python -m compileall api
+
+      # Audit dependencies for known vulnerabilities.
+      - name: pip-audit
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.txt --strict || true  # report, don't block (some pins are deliberate)
+
+      # NOTE: the test suite lives locally (tests/ is gitignored by choice).
+      # If tests are ever committed, add:  pip install -r requirements.txt && pytest tests/

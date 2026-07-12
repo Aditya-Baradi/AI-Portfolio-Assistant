@@ -3,7 +3,15 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Portfolio Assistant</title>
+  <title>Evergreen</title>
+  <script>
+    // apply the saved theme before the page paints, so there is no light flash
+    try {
+      if (localStorage.getItem("theme") === "dark") {
+        document.documentElement.dataset.theme = "dark";
+      }
+    } catch (e) {}
+  </script>
   <style>
     :root {
       --paper:      #f4f1ea;   /* warm off-white background */
@@ -18,13 +26,51 @@
       --user-bg:    #ecf1ec;   /* soft green tint for user bubbles */
       --user-line:  #d3ddd4;
       --danger:     #8c3b2e;
+      --up:         #177a53;   /* gains, buy signals, "good" chart lines */
+      --neutral:    #8a8378;   /* benchmark chart lines */
+      --up-band:    rgba(23, 122, 83, 0.10);
+      --down-band:  rgba(140, 59, 46, 0.10);
+      --chart-grid: #eee9de;
+      --chart-label:#6f6a60;
       --shadow:     0 1px 2px rgba(32,31,27,.05), 0 1px 1px rgba(32,31,27,.04);
       --serif: Georgia, "Iowan Old Style", "Times New Roman", serif;
       --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
     }
 
+    :root[data-theme="dark"] {
+      --paper:      #191813;   /* warm near-black */
+      --surface:    #211f19;
+      --surface-2:  #272520;
+      --ink:        #e9e5d9;
+      --muted:      #a29b8b;
+      --line:       #38352b;
+      --line-strong:#4a4638;
+      --accent:     #4a9c7e;
+      --accent-dark:#5cb091;
+      --user-bg:    #24312a;
+      --user-line:  #32463a;
+      --danger:     #d98a72;
+      --up:         #3fbd8c;
+      --neutral:    #8f887a;
+      --up-band:    rgba(63, 189, 140, 0.14);
+      --down-band:  rgba(217, 138, 114, 0.13);
+      --chart-grid: #2d2b23;
+      --chart-label:#a29b8b;
+      --shadow:     0 1px 2px rgba(0,0,0,.45), 0 1px 1px rgba(0,0,0,.35);
+    }
+    /* a few colors that need to flip with the theme but aren't plain variables */
+    :root[data-theme="dark"] .risk-note.ok { color: #7fd7ab; }
+    :root[data-theme="dark"] .risk-note.warn { color: #e8a78f; }
+    :root[data-theme="dark"] .h-star.on { color: #e3b341; }
+    :root[data-theme="dark"] #messageInput::placeholder { color: #726c5e; }
+
     * { box-sizing: border-box; }
+
+    /* typed text must follow the theme; browsers default form controls to black */
+    input, textarea, select { color: var(--ink); }
+    :root { color-scheme: light; }
+    :root[data-theme="dark"] { color-scheme: dark; }
 
     html, body { height: 100%; }
 
@@ -134,7 +180,7 @@
     .nav-tab.active {
       background: var(--ink);
       border-color: var(--ink);
-      color: #f4f1ea;
+      color: var(--paper);
     }
     .mark {
       width: 10px; height: 10px;
@@ -245,6 +291,260 @@
       text-align: center;
       grid-column: 1 / -1;
     }
+
+    /* ---------- Plan page ---------- */
+    .plan-page { display: none; flex: 1; min-height: 0; }
+    .plan-page.active { display: flex; flex-direction: column; }
+    .plan-grid {
+      display: grid;
+      grid-template-columns: 320px minmax(0, 1fr);
+      gap: 18px;
+      flex: 1;
+      min-height: 0;
+    }
+    .plan-card {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      padding: 16px;
+      align-self: start;
+    }
+    .plan-card-title {
+      font-family: var(--serif);
+      font-size: 1.02rem;
+      font-weight: 600;
+      padding-bottom: 10px;
+      margin-bottom: 12px;
+      border-bottom: 1px solid var(--line);
+    }
+    .plan-field { margin-bottom: 13px; }
+    .plan-field label {
+      display: block;
+      font-size: 0.74rem;
+      font-weight: 600;
+      color: var(--ink);
+      margin-bottom: 5px;
+    }
+    .plan-val { color: var(--accent); font-weight: 700; float: right; }
+    .plan-field input[type="number"], .plan-field select {
+      width: 100%;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 0.84rem;
+      background: var(--surface);
+      outline: none;
+    }
+    .plan-field input:focus, .plan-field select:focus { border-color: var(--accent); }
+    .plan-field input[type="range"] { width: 100%; accent-color: var(--accent); }
+    .plan-scale {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.64rem;
+      color: var(--muted);
+    }
+    .plan-msg { font-size: 0.74rem; color: var(--accent); margin-top: 8px; min-height: 1em; }
+    .plan-msg.err { color: var(--danger); }
+    .plan-results {
+      overflow-y: auto;
+      overflow-x: hidden;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      padding-bottom: 8px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--line-strong) transparent;
+    }
+    /* Don't let the retirement chart balloon to the full column width. */
+    .plan-results .proj-chart { max-width: 470px; margin: 6px auto 0; }
+    .plan-results .tiles { max-width: 640px; }
+    .risk-note {
+      border-radius: 10px;
+      padding: 11px 14px;
+      font-size: 0.8rem;
+      line-height: 1.5;
+    }
+    .risk-note.ok { background: rgba(23, 122, 83, 0.08); color: #14513a; }
+    .risk-note.warn { background: rgba(140, 59, 46, 0.09); color: #6e2e24; }
+    .rec-row { padding: 10px 14px; border-bottom: 1px solid var(--line); }
+    .rec-row:last-child { border-bottom: none; }
+    .rec-top {
+      display: flex;
+      align-items: baseline;
+      gap: 9px;
+      font-size: 0.84rem;
+      font-variant-numeric: tabular-nums;
+    }
+    .rec-tick { font-weight: 700; min-width: 52px; }
+    .rec-sector { color: var(--muted); font-size: 0.7rem; }
+    .rec-ret { margin-left: auto; font-weight: 650; }
+    .rec-ret.pos { color: var(--up); }
+    .rec-ret.neg { color: var(--danger); }
+    .rec-vol { color: var(--muted); font-size: 0.74rem; min-width: 88px; text-align: right; }
+    .rec-own {
+      font-size: 0.6rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 1px 5px;
+    }
+    .rec-why { font-size: 0.72rem; color: var(--muted); margin-top: 2px; line-height: 1.45; }
+    @media (max-width: 1000px) {
+      .plan-grid { grid-template-columns: 1fr; }
+    }
+
+    /* ---------- Bell, account menu, modal ---------- */
+    .header { position: relative; }
+    .bell {
+      position: relative;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--muted);
+      border-radius: 7px;
+      padding: 7px 9px;
+      cursor: pointer;
+      line-height: 0;
+    }
+    .bell:hover { color: var(--ink); }
+    .bell-dot {
+      position: absolute;
+      top: 4px; right: 4px;
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--danger);
+    }
+    .account-email { cursor: pointer; }
+    .account-email:hover { border-color: var(--line-strong); }
+    .menu-pop {
+      position: absolute;
+      top: calc(100% + 6px);
+      right: 0;
+      width: 320px;
+      max-height: 420px;
+      overflow-y: auto;
+      background: var(--surface);
+      border: 1px solid var(--line-strong);
+      border-radius: 10px;
+      box-shadow: 0 8px 28px rgba(32, 31, 27, 0.14);
+      z-index: 60;
+      padding: 6px;
+    }
+    .pop-title {
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted);
+      padding: 8px 10px 4px;
+    }
+    .pop-item {
+      display: block;
+      width: 100%;
+      text-align: left;
+      border: none;
+      background: none;
+      padding: 9px 10px;
+      font-size: 0.82rem;
+      border-radius: 7px;
+      cursor: pointer;
+      color: var(--ink);
+    }
+    .pop-item:hover { background: var(--surface-2); }
+    .pop-item.danger { color: var(--danger); }
+    .alert-row { padding: 9px 10px; border-bottom: 1px solid var(--line); font-size: 0.78rem; line-height: 1.45; }
+    .alert-row:last-child { border-bottom: none; }
+    .alert-row.unseen { background: rgba(140, 59, 46, 0.05); }
+    .alert-time { color: var(--muted); font-size: 0.66rem; }
+    .modal-back {
+      position: fixed;
+      inset: 0;
+      background: rgba(32, 31, 27, 0.35);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+    .modal {
+      background: var(--surface);
+      border-radius: 12px;
+      border: 1px solid var(--line-strong);
+      padding: 20px;
+      width: min(420px, 92vw);
+      max-height: 84vh;
+      overflow-y: auto;
+    }
+    .modal h3 { font-family: var(--serif); font-size: 1.05rem; margin-bottom: 12px; }
+    .modal .field { margin-bottom: 10px; }
+    .modal .field label { display: block; font-size: 0.74rem; font-weight: 600; margin-bottom: 4px; }
+    .modal .field input {
+      width: 100%;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 0.84rem;
+      outline: none;
+    }
+    .modal .field input:focus { border-color: var(--accent); }
+    .modal-err { color: var(--danger); font-size: 0.76rem; min-height: 1.1em; margin: 6px 0; }
+    .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+    .modal-qr { display: block; width: 180px; height: 180px; margin: 8px auto; }
+    .modal-secret {
+      font-family: var(--mono);
+      font-size: 0.74rem;
+      background: var(--surface-2);
+      padding: 6px 8px;
+      border-radius: 6px;
+      word-break: break-all;
+      text-align: center;
+    }
+    .act-row { display: flex; justify-content: space-between; padding: 6px 10px; font-size: 0.76rem; border-bottom: 1px solid var(--line); }
+    .act-row:last-child { border-bottom: none; }
+    .act-row .k { font-weight: 600; }
+    .act-row .t { color: var(--muted); font-size: 0.68rem; }
+
+    /* ---------- Mix view, headlines, trades, stars ---------- */
+    .mix-row { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; font-size: 0.74rem; }
+    .risk-note.sm { padding: 8px 11px; font-size: 0.72rem; }
+    .mix-name { min-width: 88px; font-weight: 600; }
+    .mix-bar-wrap { flex: 1; height: 9px; background: var(--surface-2); border-radius: 5px; overflow: hidden; }
+    .mix-bar { display: block; height: 100%; background: var(--accent); border-radius: 5px; }
+    .mix-pct { min-width: 38px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .headline-list { padding: 4px 12px 8px 24px; border-bottom: 1px solid var(--line); }
+    .headline { font-size: 0.72rem; line-height: 1.5; margin-bottom: 4px; }
+    .headline a { color: var(--ink); text-decoration: none; border-bottom: 1px dotted var(--line-strong); }
+    .headline a:hover { color: var(--accent); }
+    .headline .h-src { color: var(--muted); font-size: 0.66rem; }
+    .headline .h-s { font-weight: 700; }
+    .headline .h-s.up { color: var(--up); }
+    .headline .h-s.down { color: var(--danger); }
+    .holding-row { cursor: pointer; }
+    .trade-row {
+      display: flex;
+      gap: 10px;
+      align-items: baseline;
+      padding: 6px 12px;
+      font-size: 0.8rem;
+      border-bottom: 1px solid var(--line);
+      font-variant-numeric: tabular-nums;
+    }
+    .trade-row:last-child { border-bottom: none; }
+    .trade-act { font-weight: 700; min-width: 40px; font-size: 0.7rem; letter-spacing: 0.05em; }
+    .trade-act.buy { color: var(--up); }
+    .trade-act.sell { color: var(--danger); }
+    .h-star {
+      border: none;
+      background: none;
+      cursor: pointer;
+      font-size: 0.95rem;
+      color: var(--muted);
+      padding: 0 2px;
+      line-height: 1;
+    }
+    .h-star.on { color: #b8860b; }
     .chat-col {
       display: flex;
       flex-direction: column;
@@ -512,25 +812,30 @@
       border-radius: 12px;
       background: var(--surface);
       box-shadow: var(--shadow);
-      padding: 16px;
+      padding: 14px;
       display: flex;
       flex-direction: column;
-      gap: 14px;
+      gap: 10px;
       align-self: start;
       max-height: 100%;
       overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--line-strong) transparent;
     }
     .panel-head {
       display: flex;
+      flex-wrap: wrap;
       justify-content: space-between;
       align-items: center;
-      padding-bottom: 10px;
+      gap: 6px;
+      padding-bottom: 8px;
       border-bottom: 1px solid var(--line);
     }
     .panel-title {
       font-family: var(--serif);
-      font-size: 1.02rem;
+      font-size: 0.98rem;
       font-weight: 600;
+      white-space: nowrap;
     }
     .mini-tabs { display: flex; gap: 3px; }
     .mini-tab {
@@ -538,10 +843,11 @@
       background: var(--surface-2);
       color: var(--muted);
       border-radius: 6px;
-      padding: 3px 9px;
-      font-size: 0.68rem;
+      padding: 3px 7px;
+      font-size: 0.66rem;
       font-weight: 600;
       cursor: pointer;
+      white-space: nowrap;
     }
     .mini-tab.active {
       background: var(--accent);
@@ -595,7 +901,7 @@
       border: 1px solid var(--line);
       border-radius: 9px;
       background: var(--surface-2);
-      max-height: 205px;
+      max-height: 180px;
       overflow-y: auto;
       scrollbar-width: thin;
       scrollbar-color: var(--line-strong) transparent;
@@ -613,7 +919,7 @@
     .h-tick { font-weight: 600; min-width: 52px; }
     .h-val { color: var(--muted); font-size: 0.76rem; margin-left: auto; }
     .h-score { font-weight: 650; min-width: 52px; text-align: right; }
-    .h-score.up { color: #177a53; }
+    .h-score.up { color: var(--up); }
     .h-score.down { color: var(--danger); }
     .h-score.flat { color: var(--muted); font-weight: 400; }
     .h-sig {
@@ -625,7 +931,7 @@
       min-width: 44px;
       text-align: center;
     }
-    .h-sig.buy { background: rgba(23, 122, 83, 0.12); color: #177a53; }
+    .h-sig.buy { background: rgba(23, 122, 83, 0.12); color: var(--up); }
     .h-sig.sell { background: rgba(140, 59, 46, 0.12); color: var(--danger); }
     .h-sig.hold { background: transparent; color: var(--muted); border: 1px solid var(--line); }
     .holdings-loading {
@@ -696,12 +1002,16 @@
   <div class="auth-wrap" id="authView">
     <div class="auth-brand">
       <span class="mark" aria-hidden="true"></span>
-      <h1 class="title">Portfolio Assistant</h1>
+      <h1 class="title">Evergreen</h1>
     </div>
     <div class="auth-card">
       <div class="auth-tabs">
         <button class="auth-tab active" id="tabLogin" type="button">Sign in</button>
         <button class="auth-tab" id="tabRegister" type="button">Create account</button>
+      </div>
+      <div class="field" id="nameField" style="display:none">
+        <label for="authName">Your name</label>
+        <input id="authName" type="text" maxlength="60" autocomplete="name" placeholder="what should we call you?" />
       </div>
       <div class="field">
         <label for="authEmail">Email</label>
@@ -710,6 +1020,10 @@
       <div class="field">
         <label for="authPassword">Password</label>
         <input id="authPassword" type="password" autocomplete="current-password" placeholder="at least 8 characters" />
+      </div>
+      <div class="field" id="twofaField" style="display:none">
+        <label for="twofaCode">Six-digit code from your authenticator app</label>
+        <input id="twofaCode" type="text" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="one-time-code" />
       </div>
       <div class="auth-error" id="authError"></div>
       <button class="btn-primary" id="authSubmit" type="button">Sign in</button>
@@ -722,16 +1036,23 @@
     <div class="header">
       <div class="brand">
         <span class="mark" aria-hidden="true"></span>
-        <h1 class="title">Portfolio Assistant</h1>
+        <h1 class="title">Evergreen</h1>
       </div>
       <nav class="nav-tabs" aria-label="Pages">
         <button type="button" class="nav-tab active" data-page="chat">Chat</button>
         <button type="button" class="nav-tab" data-page="stocks">Stocks</button>
+        <button type="button" class="nav-tab" data-page="plan">Plan</button>
       </nav>
       <div class="account">
-        <span class="account-email" id="accountEmail"></span>
+        <button class="bell" id="bellBtn" type="button" title="Alerts" aria-label="Alerts">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+          <span class="bell-dot" id="bellDot" style="display:none"></span>
+        </button>
+        <button class="account-email" id="accountEmail" type="button" title="Account menu"></button>
         <button class="btn-quiet" id="logoutBtn" type="button">Sign out</button>
       </div>
+      <div class="menu-pop" id="bellPop" style="display:none"></div>
+      <div class="menu-pop" id="accountPop" style="display:none"></div>
     </div>
 
     <div class="layout">
@@ -768,6 +1089,7 @@
           <div class="mini-tabs" id="panelTabs" style="display:none">
             <button type="button" class="mini-tab active" data-view="outlook">Outlook</button>
             <button type="button" class="mini-tab" data-view="whatif">What if?</button>
+            <button type="button" class="mini-tab" data-view="mix">Mix</button>
           </div>
         </div>
         <div id="projBox">
@@ -792,6 +1114,52 @@
       </div>
     </div>
 
+    <!-- ================= Plan page ================= -->
+    <div class="plan-page" id="planPage">
+      <div class="plan-grid">
+        <div class="plan-card">
+          <div class="plan-card-title">Your plan</div>
+          <div class="plan-field">
+            <label for="planYears">Years until retirement</label>
+            <input id="planYears" type="number" min="1" max="60" value="30" />
+          </div>
+          <div class="plan-field">
+            <label for="planRisk">Risk comfort <span class="plan-val" id="planRiskVal">5 / 10</span></label>
+            <input id="planRisk" type="range" min="1" max="10" value="5" />
+            <div class="plan-scale"><span>Play it safe</span><span>Go for it</span></div>
+          </div>
+          <div class="plan-field">
+            <label for="planVol">Biggest yearly swings you can stomach
+              <span class="plan-val" id="planVolVal">25%</span></label>
+            <input id="planVol" type="range" min="5" max="60" value="25" />
+            <div class="plan-scale"><span>5%</span><span>60%</span></div>
+          </div>
+          <div class="plan-field">
+            <label for="planGoal">What matters most</label>
+            <select id="planGoal">
+              <option value="growth">Growth: make the money grow fastest</option>
+              <option value="balanced" selected>Balanced: good growth for the risk</option>
+              <option value="income">Steady: sleep well, fewer surprises</option>
+            </select>
+          </div>
+          <div class="plan-field">
+            <label for="planMonthly">Money added per month ($)</label>
+            <input id="planMonthly" type="number" min="0" step="50" value="0" />
+          </div>
+          <div class="plan-field">
+            <label for="planGoalAmt">Retirement goal ($, optional)</label>
+            <input id="planGoalAmt" type="number" min="0" step="10000" value="0" placeholder="e.g. 1000000" />
+          </div>
+          <button class="btn-primary" id="savePlanBtn" type="button" style="width:100%">Save plan</button>
+          <div class="plan-msg" id="planMsg"></div>
+        </div>
+        <div class="plan-results" id="planResults">
+          <div class="stocks-empty">Fill in your plan on the left and save it. You'll get a
+            retirement outlook and a list of stocks that match how you invest.</div>
+        </div>
+      </div>
+    </div>
+
     <p class="disclaimer">For learning only. Not investment advice.</p>
   </div>
 
@@ -802,6 +1170,7 @@
   // ---------------- auth state ----------------
   let token = localStorage.getItem("authToken") || "";
   let userEmail = localStorage.getItem("authEmail") || "";
+  let userName = localStorage.getItem("authName") || "";
   let currentChatId = null;
   let authMode = "login";
 
@@ -841,28 +1210,62 @@
     tabRegister.classList.toggle("active", mode === "register");
     authSubmit.textContent = mode === "login" ? "Sign in" : "Create account";
     authPassword.autocomplete = mode === "login" ? "current-password" : "new-password";
+    document.getElementById("nameField").style.display = mode === "register" ? "" : "none";
     authError.textContent = "";
   }
   tabLogin.addEventListener("click", () => setAuthMode("login"));
   tabRegister.addEventListener("click", () => setAuthMode("register"));
 
+  let pending2FA = ""; // set when the account needs a 6-digit code to finish login
+
   async function submitAuth() {
     authError.textContent = "";
     authSubmit.disabled = true;
     try {
-      const res = await fetch(API_BASE + "/auth/" + (authMode === "login" ? "login" : "register"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: authEmail.value, password: authPassword.value }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        authError.textContent = data.detail || "Something went wrong.";
-        return;
+      let res, data;
+      if (pending2FA) {
+        res = await fetch(API_BASE + "/auth/2fa/verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pending: pending2FA, code: document.getElementById("twofaCode").value }),
+        });
+        data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          authError.textContent = data.detail || "Wrong code.";
+          if (res.status === 401 && (data.detail || "").includes("expired")) {
+            pending2FA = "";
+            document.getElementById("twofaField").style.display = "none";
+            authSubmit.textContent = "Sign in";
+          }
+          return;
+        }
+      } else {
+        const payload = { email: authEmail.value, password: authPassword.value };
+        if (authMode === "register") payload.name = document.getElementById("authName").value;
+        res = await fetch(API_BASE + "/auth/" + (authMode === "login" ? "login" : "register"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          authError.textContent = data.detail || "Something went wrong.";
+          return;
+        }
+        if (data.requires_2fa) {
+          pending2FA = data.pending;
+          document.getElementById("twofaField").style.display = "";
+          document.getElementById("twofaCode").focus();
+          authSubmit.textContent = "Verify code";
+          return;
+        }
       }
-      token = data.token; userEmail = data.email;
+      pending2FA = "";
+      document.getElementById("twofaField").style.display = "none";
+      token = data.token; userEmail = data.email; userName = data.name || "";
       localStorage.setItem("authToken", token);
       localStorage.setItem("authEmail", userEmail);
+      localStorage.setItem("authName", userName);
       enterApp();
     } catch (e) {
       authError.textContent = "Cannot reach the backend on " + API_BASE + ". Is it running?";
@@ -872,11 +1275,13 @@
   }
   authSubmit.addEventListener("click", submitAuth);
   authPassword.addEventListener("keydown", (e) => { if (e.key === "Enter") submitAuth(); });
+  document.getElementById("twofaCode").addEventListener("keydown", (e) => { if (e.key === "Enter") submitAuth(); });
 
   function signOutLocal() {
-    token = ""; userEmail = "";
+    token = ""; userEmail = ""; userName = "";
     localStorage.removeItem("authToken");
     localStorage.removeItem("authEmail");
+    localStorage.removeItem("authName");
     appView.classList.remove("active");
     authView.classList.remove("hidden");
     authPassword.value = "";
@@ -890,9 +1295,10 @@
   async function enterApp() {
     authView.classList.add("hidden");
     appView.classList.add("active");
-    document.getElementById("accountEmail").textContent = userEmail;
+    document.getElementById("accountEmail").textContent = userName || userEmail;
     loadProjection();
     loadHoldings();
+    loadAlerts();
     const chats = await loadChats();
     // Restore the chat that was open before a reload, if it still exists.
     const saved = localStorage.getItem("chat:" + userEmail);
@@ -1152,13 +1558,13 @@
     return d.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
   }
 
-  function projChartSVG(d, fmt = money) {
+  function projChartSVG(d, fmt = money, xlabels = ["Now", "+6 mo", "+1 yr"]) {
     const W = 288, H = 168, L = 8, R = 64, T = 10, B = 22;
     const iw = W - L - R, ih = H - T - B;
     // Green when the most-likely path points up, red when it points down.
     const down = d.median[d.median.length - 1] < d.median[0];
-    const lineCol = down ? "#8c3b2e" : "#177a53";
-    const bandCol = down ? "rgba(140,59,46,0.10)" : "rgba(23,122,83,0.10)";
+    const lineCol = down ? "var(--danger)" : "var(--up)";
+    const bandCol = down ? "var(--down-band)" : "var(--up-band)";
     const lo = Math.min(...d.pessimistic), hi = Math.max(...d.optimistic);
     const pad = (hi - lo) * 0.06;
     const y0 = lo - pad, y1 = hi + pad;
@@ -1177,7 +1583,7 @@
     let grid = "";
     for (let g = 0; g < 3; g++) {
       const gy = Y(y0 + ((g + 1) / 4) * (y1 - y0));
-      grid += `<line x1="${L}" x2="${L + iw}" y1="${gy.toFixed(1)}" y2="${gy.toFixed(1)}" stroke="#eee9de" stroke-width="1"/>`;
+      grid += `<line x1="${L}" x2="${L + iw}" y1="${gy.toFixed(1)}" y2="${gy.toFixed(1)}" style="stroke:var(--chart-grid)" stroke-width="1"/>`;
     }
 
     const last = d.months.length - 1;
@@ -1186,19 +1592,19 @@
       <svg class="proj-chart" viewBox="0 0 ${W} ${H}" role="img"
            aria-label="Projected portfolio value over 12 months with optimistic and pessimistic bands">
         ${grid}
-        <path d="M${band} Z" fill="${bandCol}" stroke="none"/>
-        <polyline points="${pts(d.median)}" fill="none" stroke="${lineCol}" stroke-width="2"
+        <path d="M${band} Z" style="fill:${bandCol}" stroke="none"/>
+        <polyline points="${pts(d.median)}" fill="none" style="stroke:${lineCol}" stroke-width="2"
                   stroke-linecap="round" stroke-linejoin="round"/>
-        <circle cx="${X(0).toFixed(1)}" cy="${Y(d.median[0]).toFixed(1)}" r="2.6" fill="${lineCol}"/>
-        <text x="${lblX}" y="${(Y(d.optimistic[last]) + 3).toFixed(1)}" font-size="8.4" fill="#6f6a60"
+        <circle cx="${X(0).toFixed(1)}" cy="${Y(d.median[0]).toFixed(1)}" r="2.6" style="fill:${lineCol}"/>
+        <text x="${lblX}" y="${(Y(d.optimistic[last]) + 3).toFixed(1)}" font-size="8.4" style="fill:var(--chart-label)"
               font-family="ui-monospace,Consolas,monospace">${fmt(d.optimistic[last])}</text>
-        <text x="${lblX}" y="${(Y(d.median[last]) + 3).toFixed(1)}" font-size="8.8" font-weight="700" fill="${lineCol}"
+        <text x="${lblX}" y="${(Y(d.median[last]) + 3).toFixed(1)}" font-size="8.8" font-weight="700" style="fill:${lineCol}"
               font-family="ui-monospace,Consolas,monospace">${fmt(d.median[last])}</text>
-        <text x="${lblX}" y="${(Y(d.pessimistic[last]) + 3).toFixed(1)}" font-size="8.4" fill="#6f6a60"
+        <text x="${lblX}" y="${(Y(d.pessimistic[last]) + 3).toFixed(1)}" font-size="8.4" style="fill:var(--chart-label)"
               font-family="ui-monospace,Consolas,monospace">${fmt(d.pessimistic[last])}</text>
-        <text x="${L}" y="${H - 6}" font-size="8.4" fill="#6f6a60">Now</text>
-        <text x="${(L + iw / 2 - 10).toFixed(1)}" y="${H - 6}" font-size="8.4" fill="#6f6a60">+6 mo</text>
-        <text x="${(L + iw - 22).toFixed(1)}" y="${H - 6}" font-size="8.4" fill="#6f6a60">+1 yr</text>
+        <text x="${L}" y="${H - 6}" font-size="8.4" style="fill:var(--chart-label)">${xlabels[0]}</text>
+        <text x="${(L + iw / 2 - 10).toFixed(1)}" y="${H - 6}" font-size="8.4" style="fill:var(--chart-label)">${xlabels[1]}</text>
+        <text x="${(L + iw - 22).toFixed(1)}" y="${H - 6}" font-size="8.4" style="fill:var(--chart-label)">${xlabels[2]}</text>
       </svg>`;
   }
 
@@ -1252,9 +1658,64 @@
     }
     if (v === "outlook") {
       if (projData) renderPanel(projData);
-    } else {
+    } else if (v === "whatif") {
       loadWhatIf();
+    } else {
+      loadMix();
     }
+  }
+
+  // ---------------- mix (diversification) view ----------------
+  let mixData = null;
+
+  // FastAPI answers {"detail":"Not Found"} for routes it doesn't have — which
+  // means the running backend is older than this page.
+  const STALE_BACKEND_MSG =
+    "The server is running an older version. Restart the backend (Ctrl+C, then start uvicorn again) and refresh.";
+  function isStaleBackend(res, d) {
+    return res.status === 404 && (d.detail || "") === "Not Found";
+  }
+
+  async function loadMix() {
+    if (mixData) { drawMix(); return; }
+    projBox.innerHTML = '<div class="panel-empty">Working out how your money is spread…</div>';
+    try {
+      const res = await api("/portfolio/diversification", { headers: authHeaders() });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        projBox.innerHTML = `<div class="panel-empty">${isStaleBackend(res, d)
+          ? STALE_BACKEND_MSG
+          : (d.detail || "Import a portfolio to see your mix.")}</div>`;
+        return;
+      }
+      mixData = await res.json();
+      if (panelView === "mix") drawMix();
+    } catch {
+      projBox.innerHTML = '<div class="panel-empty">Could not load your mix right now.</div>';
+    }
+  }
+
+  function drawMix() {
+    const d = mixData;
+    const bar = (name, w) => `
+      <div class="mix-row">
+        <span class="mix-name">${name}</span>
+        <span class="mix-bar-wrap"><span class="mix-bar" style="width:${Math.min(w * 100, 100).toFixed(1)}%"></span></span>
+        <span class="mix-pct">${(w * 100).toFixed(0)}%</span>
+      </div>`;
+    const warn = (d.warnings || []).map((w) =>
+      `<div class="risk-note warn sm" style="margin-bottom:8px"><b>Heads up:</b> ${w}</div>`).join("");
+    const moreStocks = d.stocks.length > 5 ? `<div class="chart-sub" style="margin-bottom:4px">+ ${d.stocks.length - 5} smaller positions</div>` : "";
+    projBox.innerHTML = `
+      ${warn}
+      <div class="chart-head" style="margin-bottom:7px"><span class="chart-title">By stock</span></div>
+      ${d.stocks.slice(0, 5).map((s) => bar(s.ticker, s.weight)).join("")}
+      ${moreStocks}
+      <div class="chart-head" style="margin:8px 0 7px"><span class="chart-title">By sector</span></div>
+      ${d.sectors.slice(0, 4).map((s) => bar(s.sector, s.weight)).join("")}
+      <div class="panel-note" style="margin-top:8px">
+        Rules of thumb: keep any one stock under 25% and any one sector under 40%.
+      </div>`;
   }
 
   async function loadWhatIf() {
@@ -1277,9 +1738,9 @@
   function whatIfChartSVG(d) {
     const W = 320, H = 110, L = 6, R = 6, T = 8, B = 16;
     const series = [
-      { vals: d.curves.benchmark, color: "#8a8378", w: 1.4 },
-      { vals: d.curves.current, color: "#201f1b", w: 1.6 },
-      { vals: d.curves.optimized, color: "#177a53", w: 2 },
+      { vals: d.curves.benchmark, color: "var(--neutral)", w: 1.4 },
+      { vals: d.curves.current, color: "var(--ink)", w: 1.6 },
+      { vals: d.curves.optimized, color: "var(--up)", w: 2 },
     ];
     const all = series.flatMap((s) => s.vals);
     const lo = Math.min(...all), hi = Math.max(...all);
@@ -1289,17 +1750,17 @@
     const Y = (v) => T + (H - T - B) * (1 - (v - lo) / span);
     const lines = series.map((s) => {
       const pts = s.vals.map((v, i) => `${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(" ");
-      return `<polyline points="${pts}" fill="none" stroke="${s.color}" stroke-width="${s.w}"
+      return `<polyline points="${pts}" fill="none" style="stroke:${s.color}" stroke-width="${s.w}"
                stroke-linejoin="round" stroke-linecap="round"/>`;
     }).join("");
     return `
       <svg class="proj-chart" viewBox="0 0 ${W} ${H}" role="img"
            aria-label="Growth of $1: your mix vs the suggested mix vs the S&amp;P 500">
         <line x1="${L}" y1="${Y(1).toFixed(1)}" x2="${W - R}" y2="${Y(1).toFixed(1)}"
-              stroke="#dcd7cb" stroke-width="1" stroke-dasharray="3 3"/>
+              style="stroke:var(--line-strong)" stroke-width="1" stroke-dasharray="3 3"/>
         ${lines}
-        <text x="${L}" y="${H - 4}" font-size="8.4" fill="#6f6a60">1 year ago</text>
-        <text x="${W - R - 22}" y="${H - 4}" font-size="8.4" fill="#6f6a60">now</text>
+        <text x="${L}" y="${H - 4}" font-size="8.4" style="fill:var(--chart-label)">1 year ago</text>
+        <text x="${W - R - 22}" y="${H - 4}" font-size="8.4" style="fill:var(--chart-label)">now</text>
       </svg>`;
   }
 
@@ -1321,30 +1782,63 @@
       </div>
       ${whatIfChartSVG(d)}
       <div class="legend">
-        <span><span class="dot" style="background:#201f1b"></span>Your mix</span>
-        <span><span class="dot" style="background:#177a53"></span>Suggested mix</span>
-        <span><span class="dot" style="background:#8a8378"></span>S&amp;P 500</span>
+        <span><span class="dot" style="background:var(--ink)"></span>Your mix</span>
+        <span><span class="dot" style="background:var(--up)"></span>Suggested mix</span>
+        <span><span class="dot" style="background:var(--neutral)"></span>S&amp;P 500</span>
       </div>
       <div class="panel-note">
         The suggested mix spreads your money more evenly across the same stocks
         (biggest pieces: ${topW}). It was built with older data, then both mixes
         were measured on the past year, which it never saw. Past results don't
         guarantee future ones.
-      </div>`;
+      </div>
+      <div id="rebalanceBox"></div>`;
+    loadRebalance();
+  }
+
+  async function loadRebalance() {
+    const box = document.getElementById("rebalanceBox");
+    if (!box) return;
+    try {
+      const res = await api("/portfolio/rebalance", { headers: authHeaders() });
+      if (!res.ok) return;
+      const d = await res.json();
+      if (!d.trades || !d.trades.length) {
+        box.innerHTML = '<div class="panel-note" style="margin-top:8px">You\'re already close to the suggested mix. No trades needed.</div>';
+        return;
+      }
+      const rows = d.trades.map((t) => `
+        <div class="trade-row">
+          <span class="trade-act ${t.action}">${t.action.toUpperCase()}</span>
+          <span class="h-tick">${t.ticker}</span>
+          <span class="h-val" style="margin-left:auto">${money(t.dollars)}</span>
+        </div>`).join("");
+      box.innerHTML = `
+        <div class="chart-head" style="margin-top:12px;margin-bottom:6px">
+          <span class="chart-title">How to get there</span>
+          <span class="chart-sub">smallest trades dropped</span>
+        </div>
+        <div class="holdings-list" style="max-height:150px">${rows}</div>`;
+    } catch {}
   }
 
   function refreshPortfolio() {
     whatifData = null;
+    mixData = null;
     stocksLoaded = false;
+    planLoaded = false;
     loadHoldings();
     loadProjection();
     if (panelView === "whatif") loadWhatIf();
+    if (panelView === "mix") loadMix();
     if (stocksPage.classList.contains("active")) loadStockCards();
+    if (planPage.classList.contains("active")) loadPlan();
   }
 
-  // ---------------- page navigation (Chat / Stocks) ----------------
+  // ---------------- page navigation (Chat / Stocks / Plan) ----------------
   const chatPage = document.querySelector(".layout");
   const stocksPage = document.getElementById("stocksPage");
+  const planPage = document.getElementById("planPage");
   const stocksGrid = document.getElementById("stocksGrid");
   const stockSearch = document.getElementById("stockSearch");
   const stockSearchBtn = document.getElementById("stockSearchBtn");
@@ -1361,20 +1855,28 @@
     }
     chatPage.classList.toggle("hidden", p !== "chat");
     stocksPage.classList.toggle("active", p === "stocks");
+    planPage.classList.toggle("active", p === "plan");
     if (p === "stocks" && !stocksLoaded) loadStockCards();
+    if (p === "plan" && !planLoaded) loadPlan();
   }
 
   function fmtPrice(v) {
     return v >= 1000 ? money(v) : "$" + Number(v).toFixed(2);
   }
 
+  let watchedSet = new Set();
+
   function stockCard(d, hit = false) {
     const last = d.months.length - 1;
     const down = d.median[last] < d.median[0];
-    const medCol = down ? "var(--danger)" : "#177a53";
+    const medCol = down ? "var(--danger)" : "var(--up)";
+    const starred = watchedSet.has(d.ticker);
     return `<div class="stock-card${hit ? " hit" : ""}" data-ticker="${d.ticker}">
       <div class="stock-head">
-        <span class="stock-tick">${d.ticker}</span>
+        <span class="stock-tick">${d.ticker}
+          <button type="button" class="h-star${starred ? " on" : ""}" data-t="${d.ticker}"
+            title="${starred ? "Remove from" : "Add to"} your watchlist">${starred ? "★" : "☆"}</button>
+        </span>
         <span class="stock-price">${fmtPrice(d.price)} now</span>
       </div>
       <div class="stock-range">
@@ -1386,8 +1888,27 @@
     </div>`;
   }
 
+  function wireStars() {
+    for (const b of stocksGrid.querySelectorAll(".h-star")) {
+      b.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const t = b.dataset.t;
+        const method = watchedSet.has(t) ? "DELETE" : "POST";
+        try {
+          const res = await api(`/watchlist/${t}`, { method, headers: authHeaders() });
+          if (!res.ok) return;
+          if (method === "POST") watchedSet.add(t); else watchedSet.delete(t);
+          b.classList.toggle("on", watchedSet.has(t));
+          b.textContent = watchedSet.has(t) ? "★" : "☆";
+          b.title = (watchedSet.has(t) ? "Remove from" : "Add to") + " your watchlist";
+        } catch {}
+      });
+    }
+  }
+
   async function loadStockCards() {
     stocksGrid.innerHTML = '<div class="stocks-empty">Working out estimated ranges…</div>';
+    loadHistoryCard();
     try {
       const res = await api("/stocks/projections", { headers: authHeaders() });
       if (!res.ok) {
@@ -1396,12 +1917,165 @@
         return;
       }
       const d = await res.json();
+      watchedSet = new Set(d.watchlist || []);
       stocksGrid.innerHTML = d.stocks.map((x) => stockCard(x)).join("")
         || '<div class="stocks-empty">No stocks yet. Look one up above.</div>';
+      wireStars();
       stocksLoaded = true;
     } catch {
       stocksGrid.innerHTML = '<div class="stocks-empty">Could not load estimates right now.</div>';
     }
+  }
+
+  // "How have I actually done?" chart above the stock cards.
+  async function loadHistoryCard() {
+    let card = document.getElementById("historyCard");
+    if (!card) {
+      card = document.createElement("div");
+      card.id = "historyCard";
+      card.className = "plan-card";
+      card.style.cssText = "margin-bottom:14px";
+      stocksGrid.parentElement.insertBefore(card, stocksGrid);
+    }
+    card.style.display = "none";
+    try {
+      const res = await api("/portfolio/history", { headers: authHeaders() });
+      if (!res.ok) return; // no dated holdings; keep it hidden
+      const d = await res.json();
+      const diff = d.portfolio_now - d.benchmark_now;
+      const beat = diff >= 0;
+      const summary = `worth ${money(d.portfolio_now)} now, `
+        + `${beat ? "ahead of" : "behind"} the S&P 500 by ${money(Math.abs(diff))}`;
+      card.style.display = "";
+      card.innerHTML = `
+        <div class="chart-head">
+          <span class="chart-title">Your money since ${friendlyDate(d.since)}</span>
+          <span class="chart-sub" id="histReadout"></span>
+        </div>
+        ${historyChartSVG(d)}
+        <div class="legend">
+          <span><span class="dot" style="background:var(--up)"></span>Your portfolio</span>
+          <span><span class="dot" style="background:var(--neutral)"></span>Same money in the S&amp;P 500</span>
+          <span style="margin-left:auto">point at the chart for exact numbers</span>
+        </div>`;
+      wireHistoryHover(card, d, summary);
+    } catch {}
+  }
+
+  const HIST = { W: 640, H: 170, L: 10, R: 58, T: 10, B: 18 };
+
+  function histScales(d) {
+    const { W, H, L, R, T, B } = HIST;
+    const all = d.portfolio.concat(d.benchmark);
+    let lo = Math.min(...all), hi = Math.max(...all);
+    const pad = (hi - lo || 1) * 0.06;
+    lo -= pad; hi += pad;
+    const n = d.dates.length;
+    return {
+      n, lo, hi,
+      X: (i) => L + (W - L - R) * (n > 1 ? i / (n - 1) : 0),
+      Y: (v) => T + (H - T - B) * (1 - (v - lo) / (hi - lo)),
+    };
+  }
+
+  // round dollar values that land inside the chart, e.g. 700, 750, 800
+  function moneyTicks(lo, hi) {
+    const raw = (hi - lo || 1) / 3.5;
+    const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    let step = mag * 10;
+    for (const m of [1, 2, 2.5, 5, 10]) if (mag * m >= raw) { step = mag * m; break; }
+    const ticks = [];
+    for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) ticks.push(v);
+    return ticks;
+  }
+
+  function shortDate(iso) {
+    const dt = new Date(iso + "T00:00:00");
+    if (isNaN(dt)) return iso;
+    return dt.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+  }
+
+  function historyChartSVG(d) {
+    const { W, H, L, R, T, B } = HIST;
+    const s = histScales(d);
+    const line = (vals, color, w) =>
+      `<polyline points="${vals.map((v, i) => `${s.X(i).toFixed(1)},${s.Y(v).toFixed(1)}`).join(" ")}"
+        fill="none" style="stroke:${color}" stroke-width="${w}" stroke-linejoin="round"/>`;
+
+    let grid = "";
+    for (const v of moneyTicks(s.lo, s.hi)) {
+      grid += `<line x1="${L}" x2="${W - R}" y1="${s.Y(v).toFixed(1)}" y2="${s.Y(v).toFixed(1)}"
+          style="stroke:var(--chart-grid)" stroke-width="1"/>
+        <text x="${L + 2}" y="${(s.Y(v) - 3).toFixed(1)}" font-size="8.6" style="fill:var(--chart-label)"
+          font-family="ui-monospace,Consolas,monospace">${money(v)}</text>`;
+    }
+
+    const last = s.n - 1;
+    const mid = Math.floor(last / 2);
+    const xdates = last < 1 ? "" : `
+      <text x="${L}" y="${H - 4}" font-size="8.6" style="fill:var(--chart-label)">${shortDate(d.dates[0])}</text>
+      <text x="${(s.X(mid) - 16).toFixed(1)}" y="${H - 4}" font-size="8.6" style="fill:var(--chart-label)">${shortDate(d.dates[mid])}</text>
+      <text x="${(W - R - 34).toFixed(1)}" y="${H - 4}" font-size="8.6" style="fill:var(--chart-label)">${shortDate(d.dates[last])}</text>`;
+
+    // final values written next to where each line ends; nudge apart if they overlap
+    let yP = s.Y(d.portfolio[last]) + 3, yB = s.Y(d.benchmark[last]) + 3;
+    if (Math.abs(yP - yB) < 10) {
+      const c = (yP + yB) / 2;
+      const pAbove = yP <= yB;
+      yP = pAbove ? c - 5 : c + 5;
+      yB = pAbove ? c + 5 : c - 5;
+    }
+    const endLbls = `
+      <text x="${W - R + 5}" y="${yP.toFixed(1)}" font-size="8.8" font-weight="700" style="fill:var(--up)"
+        font-family="ui-monospace,Consolas,monospace">${money(d.portfolio[last])}</text>
+      <text x="${W - R + 5}" y="${yB.toFixed(1)}" font-size="8.4" style="fill:var(--chart-label)"
+        font-family="ui-monospace,Consolas,monospace">${money(d.benchmark[last])}</text>`;
+
+    return `<svg id="histSvg" class="proj-chart" style="max-width:100%" viewBox="0 0 ${W} ${H}" role="img"
+        aria-label="Your portfolio's value over time vs the S&amp;P 500">
+      ${grid}
+      ${line(d.benchmark, "var(--neutral)", 1.4)}
+      ${line(d.portfolio, "var(--up)", 2)}
+      ${endLbls}
+      ${xdates}
+      <g id="histCross" style="display:none">
+        <line id="histCrossLine" y1="${T}" y2="${H - B}" style="stroke:var(--line-strong)"
+          stroke-width="1" stroke-dasharray="3 3"/>
+        <circle id="histDotP" r="3" style="fill:var(--up)"/>
+        <circle id="histDotB" r="2.5" style="fill:var(--neutral)"/>
+      </g>
+    </svg>`;
+  }
+
+  // moving the mouse over the chart shows the exact numbers for that day
+  function wireHistoryHover(card, d, summary) {
+    const svg = card.querySelector("#histSvg");
+    const readout = card.querySelector("#histReadout");
+    if (!svg || !readout) return;
+    readout.textContent = summary;
+    const { W, L, R } = HIST;
+    const s = histScales(d);
+    const cross = svg.querySelector("#histCross");
+    const vline = svg.querySelector("#histCrossLine");
+    const dotP = svg.querySelector("#histDotP");
+    const dotB = svg.querySelector("#histDotB");
+    svg.addEventListener("mousemove", (e) => {
+      const rect = svg.getBoundingClientRect();
+      if (!rect.width) return;
+      const vx = ((e.clientX - rect.left) / rect.width) * W;
+      let i = Math.round(((vx - L) / (W - L - R)) * (s.n - 1));
+      i = Math.max(0, Math.min(s.n - 1, i));
+      const x = s.X(i).toFixed(1);
+      vline.setAttribute("x1", x); vline.setAttribute("x2", x);
+      dotP.setAttribute("cx", x); dotP.setAttribute("cy", s.Y(d.portfolio[i]).toFixed(1));
+      dotB.setAttribute("cx", x); dotB.setAttribute("cy", s.Y(d.benchmark[i]).toFixed(1));
+      cross.style.display = "";
+      readout.textContent = `${friendlyDate(d.dates[i])}: yours ${money(d.portfolio[i])} · S&P 500 ${money(d.benchmark[i])}`;
+    });
+    svg.addEventListener("mouseleave", () => {
+      cross.style.display = "none";
+      readout.textContent = summary;
+    });
   }
 
   async function searchStock() {
@@ -1436,6 +2110,190 @@
   stockSearchBtn.addEventListener("click", searchStock);
   stockSearch.addEventListener("keydown", (e) => { if (e.key === "Enter") searchStock(); });
 
+  // ---------------- plan page ----------------
+  const planResults = document.getElementById("planResults");
+  const planMsg = document.getElementById("planMsg");
+  let planLoaded = false;
+
+  const planRisk = document.getElementById("planRisk");
+  const planVol = document.getElementById("planVol");
+  planRisk.addEventListener("input", () => {
+    document.getElementById("planRiskVal").textContent = `${planRisk.value} / 10`;
+  });
+  planVol.addEventListener("input", () => {
+    document.getElementById("planVolVal").textContent = `${planVol.value}%`;
+  });
+
+  function fillPlanForm(p) {
+    if (p.years_to_retirement) document.getElementById("planYears").value = p.years_to_retirement;
+    if (p.risk_tolerance) {
+      planRisk.value = p.risk_tolerance;
+      document.getElementById("planRiskVal").textContent = `${p.risk_tolerance} / 10`;
+    }
+    if (p.max_volatility_pct) {
+      planVol.value = p.max_volatility_pct;
+      document.getElementById("planVolVal").textContent = `${p.max_volatility_pct}%`;
+    }
+    if (p.goal) document.getElementById("planGoal").value = p.goal;
+    if (p.monthly_contribution != null) document.getElementById("planMonthly").value = p.monthly_contribution;
+    if (p.goal_amount != null) document.getElementById("planGoalAmt").value = p.goal_amount;
+  }
+
+  async function loadPlan() {
+    planLoaded = true;
+    try {
+      const res = await api("/profile", { headers: authHeaders() });
+      if (!res.ok) return;
+      const p = await res.json();
+      if (p && p.years_to_retirement) {
+        fillPlanForm(p);
+        loadPlanResults();
+      }
+    } catch {}
+  }
+
+  async function savePlan() {
+    planMsg.className = "plan-msg";
+    planMsg.textContent = "";
+    const body = {
+      years_to_retirement: parseInt(document.getElementById("planYears").value, 10),
+      risk_tolerance: parseInt(planRisk.value, 10),
+      max_volatility_pct: parseFloat(planVol.value),
+      goal: document.getElementById("planGoal").value,
+      monthly_contribution: parseFloat(document.getElementById("planMonthly").value) || 0,
+      goal_amount: parseFloat(document.getElementById("planGoalAmt").value) || 0,
+    };
+    if (!body.years_to_retirement || body.years_to_retirement < 1 || body.years_to_retirement > 60) {
+      planMsg.className = "plan-msg err";
+      planMsg.textContent = "Years until retirement must be between 1 and 60.";
+      return;
+    }
+    try {
+      const res = await api("/profile", {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        planMsg.className = "plan-msg err";
+        planMsg.textContent = res.status === 404
+          ? "The server is running an older version. Restart the backend (Ctrl+C, then start uvicorn again) and retry."
+          : (d.detail || "Could not save.");
+        return;
+      }
+      planMsg.textContent = "Saved.";
+      loadPlanResults();
+    } catch {
+      planMsg.className = "plan-msg err";
+      planMsg.textContent = "Could not reach the server.";
+    }
+  }
+  document.getElementById("savePlanBtn").addEventListener("click", savePlan);
+
+  async function loadPlanResults() {
+    planResults.innerHTML = '<div class="stocks-empty">Working out your outlook and picks… first time can take a minute.</div>';
+    try {
+      const [retRes, recRes] = await Promise.all([
+        api("/plan/retirement", { headers: authHeaders() }),
+        api("/plan/recommendations", { headers: authHeaders() }),
+      ]);
+      const ret = retRes.ok ? await retRes.json() : null;
+      const rec = recRes.ok ? await recRes.json() : null;
+      renderPlanResults(ret, rec);
+    } catch {
+      planResults.innerHTML = '<div class="stocks-empty">Could not load your plan results right now.</div>';
+    }
+  }
+
+  function renderPlanResults(ret, rec) {
+    let html = "";
+
+    if (ret) {
+      const last = ret.years.length - 1;
+      const y = ret.years[last];
+      const half = Math.round(y / 2);
+      const hasGoal = ret.goal && ret.p_goal != null;
+      const pPct = hasGoal ? Math.round(ret.p_goal * 100) : 0;
+      const pCls = pPct >= 60 ? "pos" : "neg";
+      const goalTile = hasGoal
+        ? `<div class="tile" title="Share of the 1,000 simulations that end at or above your goal">
+             <div class="k">Chance of ${money(ret.goal)}</div><div class="v ${pCls}">${pPct}%</div></div>`
+        : "";
+      const goalNote = hasGoal && ret.monthly_needed != null
+        ? `<div class="risk-note warn" style="margin-top:10px">To give your ${money(ret.goal)} goal
+             a 60% chance, you'd need to add about <b>${money(ret.monthly_needed)}/month</b>
+             (you're at ${money(ret.assumptions.monthly)}).</div>`
+        : "";
+      html += `
+        <div class="plan-card" style="align-self:stretch">
+          <div class="chart-head">
+            <span class="chart-title">The road to retirement</span>
+            <span class="chart-sub">assumes ~${(ret.assumptions.mu * 100).toFixed(0)}%/yr growth,
+              ${(ret.assumptions.sigma * 100).toFixed(0)}% yearly swings</span>
+          </div>
+          <div class="tiles" style="grid-template-columns:repeat(${hasGoal ? 4 : 3},1fr);margin-top:10px">
+            <div class="tile"><div class="k">Most likely</div><div class="v">${money(ret.median[last])}</div></div>
+            <div class="tile"><div class="k">If markets are kind</div><div class="v">${money(ret.optimistic[last])}</div></div>
+            <div class="tile"><div class="k">If they're rough</div><div class="v">${money(ret.pessimistic[last])}</div></div>
+            ${goalTile}
+          </div>
+          ${goalNote}
+          ${projChartSVG({ months: ret.years, median: ret.median, optimistic: ret.optimistic, pessimistic: ret.pessimistic },
+                         money, ["Now", `+${half} yr`, `+${y} yr`])}
+          <div class="panel-note">
+            1,000 simulated futures for your money over ${y} years at the risk level
+            you picked: bigger swings mean more expected growth but a much wider range
+            of outcomes. Includes ${money(ret.assumptions.monthly)}/month added along
+            the way (${money(ret.total_contributed)} put in altogether). The band covers
+            the middle two-thirds of outcomes. Real life can be better or worse.
+          </div>
+        </div>`;
+    }
+
+    if (rec && rec.portfolio_check) {
+      const c = rec.portfolio_check;
+      const pv = (c.portfolio_volatility * 100).toFixed(0);
+      html += c.too_risky
+        ? `<div class="risk-note warn"><b>Heads up:</b> your portfolio swings about ${pv}% a year,
+           more than the ${c.max_volatility_pct}% you said you're comfortable with.
+           The steadier picks below could bring that down.</div>`
+        : `<div class="risk-note ok">Your portfolio swings about ${pv}% a year, within the
+           ${c.max_volatility_pct}% you said you're comfortable with.</div>`;
+    }
+
+    if (rec && rec.recommendations && rec.recommendations.length) {
+      const rows = rec.recommendations.map((r) => {
+        const ret2 = r.est_annual_return * 100;
+        return `<div class="rec-row">
+          <div class="rec-top">
+            <span class="rec-tick">${r.ticker}</span>
+            <span class="rec-sector">${r.sector}</span>
+            ${r.owned ? '<span class="rec-own">YOU OWN IT</span>' : ""}
+            <span class="rec-ret ${ret2 >= 0 ? "pos" : "neg"}">${ret2 >= 0 ? "+" : ""}${ret2.toFixed(0)}%/yr</span>
+            <span class="rec-vol">${(r.volatility * 100).toFixed(0)}% swings</span>
+          </div>
+          <div class="rec-why">${r.why}</div>
+        </div>`;
+      }).join("");
+      html += `
+        <div class="plan-card" style="align-self:stretch;padding:0">
+          <div class="plan-card-title" style="padding:14px 14px 10px;margin-bottom:0">
+            Stocks that fit your plan</div>
+          ${rows}
+          <div class="panel-note" style="padding:10px 14px 14px;border-top:1px solid var(--line)">
+            Screened from 48 large, well-known US companies: anything swingier than your
+            limit is excluded, and the rest are ranked by how well they match your risk
+            level and goal. A starting point for research, not advice.
+          </div>
+        </div>`;
+    } else if (rec) {
+      html += '<div class="stocks-empty">No stocks fit those limits. Try allowing bigger swings.</div>';
+    }
+
+    planResults.innerHTML = html || '<div class="stocks-empty">Could not load results. Try saving again.</div>';
+  }
+
   // ---------------- holdings news-sentiment list ----------------
   let holdingsData = null;
   let addingHolding = false;
@@ -1450,8 +2308,9 @@
       const sig = h.signal.toLowerCase(); // buy | hold | sell
       const mood = h.label === "Bullish" ? "Mostly good news"
         : h.label === "Bearish" ? "Mostly bad news" : "Mixed news";
-      return `<div class="holding-row" title="${noNews ? "No recent news found"
-          : `${mood} (${h.n_headlines} recent headlines)`}">
+      const divNote = h.income ? ` Pays about ${money(h.income)}/yr in dividends.` : "";
+      return `<div class="holding-row" data-ticker="${h.ticker}" title="${(noNews ? "No recent news found"
+          : `${mood} (${h.n_headlines} recent headlines)`) + divNote} Click for headlines.">
         <span class="h-tick">${h.ticker}</span>
         <span class="h-val">${money(h.value)}</span>
         <span class="h-score ${cls}">${scoreLabel}</span>
@@ -1470,18 +2329,17 @@
 
     holdingsBox.innerHTML = `
       <div class="chart-head" style="margin-bottom:8px">
-        <span class="chart-title">Your stocks in the news</span>
+        <span class="chart-title">In the news</span>
         <span style="display:flex;gap:8px;align-items:center">
           <span class="chart-sub">as of ${friendlyDate(holdingsData.as_of)}</span>
           <button type="button" class="mini-tab" id="addToggle">${addingHolding ? "Close" : "+ Add"}</button>
         </span>
       </div>
       <div class="holdings-list">${addForm}${rows}</div>
-      <div class="panel-note" style="border-top:none;padding-top:8px">
-        The score shows how positive the recent news is about each stock,
-        from &minus;1 (bad news) to +1 (good news).
-        The <b>Buy&nbsp;/&nbsp;Sell</b> tag follows the news mood.
-        Use it as a starting point, not as advice.
+      <div class="panel-note" style="border-top:none;padding-top:6px">
+        ${holdingsData.total_income ? `Your holdings pay about <b>${money(holdingsData.total_income)}/yr</b> in dividends. ` : ""}
+        Scores run from &minus;1 (bad news) to +1 (good news); the tag follows
+        the news mood. Click a stock for its headlines. Not advice.
       </div>`;
 
     document.getElementById("addToggle").addEventListener("click", () => {
@@ -1499,7 +2357,46 @@
       }
     }
     for (const b of holdingsBox.querySelectorAll(".h-del")) {
-      b.addEventListener("click", () => removeHolding(b.dataset.t));
+      b.addEventListener("click", (e) => { e.stopPropagation(); removeHolding(b.dataset.t); });
+    }
+    for (const row of holdingsBox.querySelectorAll(".holding-row")) {
+      row.addEventListener("click", () => toggleHeadlines(row));
+    }
+  }
+
+  async function toggleHeadlines(row) {
+    const existing = row.nextElementSibling;
+    if (existing && existing.classList.contains("headline-list")) {
+      existing.remove();
+      return;
+    }
+    for (const el of holdingsBox.querySelectorAll(".headline-list")) el.remove();
+    const box = document.createElement("div");
+    box.className = "headline-list";
+    box.innerHTML = '<div class="headline">Loading headlines…</div>';
+    row.after(box);
+    try {
+      const res = await api(`/stocks/news/${row.dataset.ticker}`, { headers: authHeaders() });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        box.innerHTML = `<div class="headline">${isStaleBackend(res, d)
+          ? STALE_BACKEND_MSG
+          : (d.detail || "No headlines found.")}</div>`;
+        return;
+      }
+      const d = await res.json();
+      box.innerHTML = d.headlines.length
+        ? d.headlines.map((h) => {
+            const cls = h.score > 0.005 ? "up" : h.score < -0.005 ? "down" : "";
+            return `<div class="headline">
+              <span class="h-s ${cls}">${h.score >= 0 ? "+" : ""}${h.score.toFixed(2)}</span>
+              ${h.url ? `<a href="${h.url}" target="_blank" rel="noopener noreferrer">${h.title}</a>` : h.title}
+              <span class="h-src">${h.publisher}</span>
+            </div>`;
+          }).join("")
+        : '<div class="headline">No recent headlines.</div>';
+    } catch {
+      box.innerHTML = '<div class="headline">Could not load headlines.</div>';
     }
   }
 
@@ -1562,6 +2459,272 @@
     } catch { if (!holdingsData) holdingsBox.innerHTML = ""; }
   }
 
+  // ---------------- alerts bell + account menu ----------------
+  const bellBtn = document.getElementById("bellBtn");
+  const bellDot = document.getElementById("bellDot");
+  const bellPop = document.getElementById("bellPop");
+  const accountPop = document.getElementById("accountPop");
+  let alertsData = [];
+
+  async function loadAlerts() {
+    try {
+      const res = await api("/alerts", { headers: authHeaders() });
+      if (!res.ok) return;
+      const d = await res.json();
+      alertsData = d.alerts || [];
+      bellDot.style.display = d.unseen > 0 ? "" : "none";
+    } catch {}
+  }
+
+  function closePops() {
+    bellPop.style.display = "none";
+    accountPop.style.display = "none";
+  }
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest(".menu-pop") && !e.target.closest("#bellBtn")
+        && !e.target.closest("#accountEmail")) closePops();
+  });
+
+  bellBtn.addEventListener("click", async () => {
+    const open = bellPop.style.display !== "none";
+    closePops();
+    if (open) return;
+    bellPop.innerHTML = '<div class="pop-title">Alerts</div>'
+      + (alertsData.length
+        ? alertsData.map((a) => `
+            <div class="alert-row${a.seen ? "" : " unseen"}">${a.message}
+              <div class="alert-time">${friendlyDate(a.created_at.slice(0, 10))}</div>
+            </div>`).join("")
+        : '<div class="alert-row">Nothing to report. You\'ll see a note here if your portfolio drops sharply or a stock\'s news turns negative.</div>');
+    bellPop.style.display = "";
+    if (alertsData.some((a) => !a.seen)) {
+      try { await api("/alerts/seen", { method: "POST", headers: authHeaders() }); } catch {}
+      bellDot.style.display = "none";
+    }
+  });
+
+  // ----- generic modal -----
+  function showModal(html) {
+    closeModal();
+    const back = document.createElement("div");
+    back.className = "modal-back";
+    back.id = "modalBack";
+    back.innerHTML = `<div class="modal">${html}</div>`;
+    back.addEventListener("click", (e) => { if (e.target === back) closeModal(); });
+    document.body.appendChild(back);
+  }
+  function closeModal() {
+    document.getElementById("modalBack")?.remove();
+  }
+
+  document.getElementById("accountEmail").addEventListener("click", async () => {
+    const open = accountPop.style.display !== "none";
+    closePops();
+    if (open) return;
+    let twofa = false;
+    try {
+      const res = await api("/me", { headers: authHeaders() });
+      if (res.ok) twofa = (await res.json()).twofa_enabled;
+    } catch {}
+    const darkNow = document.documentElement.dataset.theme === "dark";
+    accountPop.innerHTML = `
+      <div class="pop-title">${userEmail}</div>
+      <button type="button" class="pop-item" id="miTheme">Switch to ${darkNow ? "light" : "dark"} mode</button>
+      <button type="button" class="pop-item" id="miName">${userName ? "Change" : "Set"} your name</button>
+      <button type="button" class="pop-item" id="miActivity">Recent activity</button>
+      <button type="button" class="pop-item" id="miExport">Download my data</button>
+      <button type="button" class="pop-item" id="miPassword">Change password</button>
+      <button type="button" class="pop-item" id="mi2fa">${twofa ? "Turn off" : "Turn on"} two-factor sign-in</button>
+      <button type="button" class="pop-item danger" id="miDelete">Delete my account</button>`;
+    accountPop.style.display = "";
+
+    document.getElementById("miTheme").addEventListener("click", () => {
+      const dark = document.documentElement.dataset.theme !== "dark";
+      if (dark) document.documentElement.dataset.theme = "dark";
+      else delete document.documentElement.dataset.theme;
+      try { localStorage.setItem("theme", dark ? "dark" : "light"); } catch (e) {}
+      document.getElementById("miTheme").textContent = `Switch to ${dark ? "light" : "dark"} mode`;
+    });
+
+    document.getElementById("miName").addEventListener("click", () => {
+      closePops();
+      showModal(`<h3>${userName ? "Change" : "Set"} your name</h3>
+        <div class="field"><label>Name</label><input id="nmVal" type="text" maxlength="60" autocomplete="name" value="${userName.replace(/"/g, "&quot;")}"></div>
+        <div class="modal-err" id="nmErr"></div>
+        <div class="modal-actions">
+          <button class="btn-quiet" onclick="document.getElementById('modalBack').remove()">Cancel</button>
+          <button class="btn-primary" id="nmGo">Save</button>
+        </div>`);
+      document.getElementById("nmVal").focus();
+      document.getElementById("nmGo").addEventListener("click", async () => {
+        const err = document.getElementById("nmErr");
+        try {
+          const res = await api("/account/name", {
+            method: "POST",
+            headers: authHeaders({ "Content-Type": "application/json" }),
+            body: JSON.stringify({ name: document.getElementById("nmVal").value }),
+          });
+          const d = await res.json().catch(() => ({}));
+          if (!res.ok) { err.textContent = d.detail || "Could not save your name."; return; }
+          userName = d.name;
+          localStorage.setItem("authName", userName);
+          document.getElementById("accountEmail").textContent = userName || userEmail;
+          closeModal();
+        } catch { err.textContent = "Could not reach the server."; }
+      });
+    });
+
+    document.getElementById("miExport").addEventListener("click", async () => {
+      closePops();
+      try {
+        const res = await api("/account/export", { headers: authHeaders() });
+        if (!res.ok) return;
+        const blob = await res.blob();
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "portfolio-assistant-export.json";
+        a.click();
+        URL.revokeObjectURL(a.href);
+      } catch {}
+    });
+
+    document.getElementById("miActivity").addEventListener("click", async () => {
+      closePops();
+      let rows = '<div class="act-row">Could not load activity.</div>';
+      try {
+        const res = await api("/account/activity", { headers: authHeaders() });
+        if (res.ok) {
+          const d = await res.json();
+          const label = { login: "Signed in", register: "Account created",
+            portfolio_import: "Portfolio imported", password_changed: "Password changed",
+            "2fa_enabled": "Two-factor turned on", "2fa_disabled": "Two-factor turned off",
+            failed_2fa: "Wrong two-factor code" };
+          rows = d.events.length ? d.events.map((ev) => `
+            <div class="act-row"><span class="k">${label[ev.kind] || ev.kind}</span>
+              <span class="t">${ev.ip || ""} · ${ev.created_at.slice(0, 16).replace("T", " ")}</span></div>`).join("")
+            : '<div class="act-row">No activity recorded yet.</div>';
+        }
+      } catch {}
+      showModal(`<h3>Recent activity</h3>${rows}
+        <div class="modal-actions"><button class="btn-quiet" onclick="document.getElementById('modalBack').remove()">Close</button></div>`);
+    });
+
+    document.getElementById("miPassword").addEventListener("click", () => {
+      closePops();
+      showModal(`<h3>Change password</h3>
+        <div class="field"><label>Current password</label><input id="cpCur" type="password" autocomplete="current-password"></div>
+        <div class="field"><label>New password (at least 8 characters)</label><input id="cpNew" type="password" autocomplete="new-password"></div>
+        <div class="modal-err" id="cpErr"></div>
+        <div class="modal-actions">
+          <button class="btn-quiet" onclick="document.getElementById('modalBack').remove()">Cancel</button>
+          <button class="btn-primary" id="cpGo">Change password</button>
+        </div>`);
+      document.getElementById("cpGo").addEventListener("click", async () => {
+        const err = document.getElementById("cpErr");
+        try {
+          const res = await api("/auth/change-password", {
+            method: "POST",
+            headers: authHeaders({ "Content-Type": "application/json" }),
+            body: JSON.stringify({
+              current_password: document.getElementById("cpCur").value,
+              new_password: document.getElementById("cpNew").value,
+            }),
+          });
+          const d = await res.json().catch(() => ({}));
+          if (!res.ok) { err.textContent = d.detail || "Could not change password."; return; }
+          token = d.token;
+          localStorage.setItem("authToken", token);
+          closeModal();
+        } catch { err.textContent = "Could not reach the server."; }
+      });
+    });
+
+    document.getElementById("mi2fa").addEventListener("click", async () => {
+      closePops();
+      if (twofa) {
+        showModal(`<h3>Turn off two-factor sign-in</h3>
+          <div class="field"><label>Confirm with your password</label><input id="tfPw" type="password"></div>
+          <div class="modal-err" id="tfErr"></div>
+          <div class="modal-actions">
+            <button class="btn-quiet" onclick="document.getElementById('modalBack').remove()">Cancel</button>
+            <button class="btn-primary" id="tfGo">Turn off</button>
+          </div>`);
+        document.getElementById("tfGo").addEventListener("click", async () => {
+          const err = document.getElementById("tfErr");
+          try {
+            const res = await api("/auth/2fa/disable", {
+              method: "POST",
+              headers: authHeaders({ "Content-Type": "application/json" }),
+              body: JSON.stringify({ password: document.getElementById("tfPw").value }),
+            });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) { err.textContent = d.detail || "Could not turn off."; return; }
+            closeModal();
+          } catch { err.textContent = "Could not reach the server."; }
+        });
+        return;
+      }
+      try {
+        const res = await api("/auth/2fa/setup", { method: "POST", headers: authHeaders() });
+        if (!res.ok) return;
+        const d = await res.json();
+        showModal(`<h3>Turn on two-factor sign-in</h3>
+          <p style="font-size:0.8rem;line-height:1.5">Scan this QR code with Google Authenticator,
+            Authy, or any authenticator app, then enter the 6-digit code it shows.</p>
+          <img class="modal-qr" src="${d.qr}" alt="QR code for authenticator app">
+          <div class="modal-secret">${d.secret}</div>
+          <div class="field" style="margin-top:10px"><label>6-digit code</label>
+            <input id="tfCode" inputmode="numeric" maxlength="6" placeholder="123456"></div>
+          <div class="modal-err" id="tfErr"></div>
+          <div class="modal-actions">
+            <button class="btn-quiet" onclick="document.getElementById('modalBack').remove()">Cancel</button>
+            <button class="btn-primary" id="tfGo">Turn on</button>
+          </div>`);
+        document.getElementById("tfGo").addEventListener("click", async () => {
+          const err = document.getElementById("tfErr");
+          try {
+            const res2 = await api("/auth/2fa/enable", {
+              method: "POST",
+              headers: authHeaders({ "Content-Type": "application/json" }),
+              body: JSON.stringify({ code: document.getElementById("tfCode").value }),
+            });
+            const d2 = await res2.json().catch(() => ({}));
+            if (!res2.ok) { err.textContent = d2.detail || "Wrong code."; return; }
+            closeModal();
+          } catch { err.textContent = "Could not reach the server."; }
+        });
+      } catch {}
+    });
+
+    document.getElementById("miDelete").addEventListener("click", () => {
+      closePops();
+      showModal(`<h3>Delete my account</h3>
+        <p style="font-size:0.8rem;line-height:1.5;color:var(--danger)">This permanently deletes
+          your account, portfolio, plan, chats, and alerts. It cannot be undone.</p>
+        <div class="field" style="margin-top:10px"><label>Confirm with your password</label>
+          <input id="delPw" type="password"></div>
+        <div class="modal-err" id="delErr"></div>
+        <div class="modal-actions">
+          <button class="btn-quiet" onclick="document.getElementById('modalBack').remove()">Cancel</button>
+          <button class="btn-primary" id="delGo" style="background:var(--danger);border-color:var(--danger)">Delete forever</button>
+        </div>`);
+      document.getElementById("delGo").addEventListener("click", async () => {
+        const err = document.getElementById("delErr");
+        try {
+          const res = await api("/account/delete", {
+            method: "POST",
+            headers: authHeaders({ "Content-Type": "application/json" }),
+            body: JSON.stringify({ password: document.getElementById("delPw").value }),
+          });
+          const d = await res.json().catch(() => ({}));
+          if (!res.ok) { err.textContent = d.detail || "Could not delete."; return; }
+          closeModal();
+          signOutLocal();
+        } catch { err.textContent = "Could not reach the server."; }
+      });
+    });
+  });
+
   // ---------------- boot ----------------
   (async function boot() {
     if (!token) return; // show auth view
@@ -1570,6 +2733,8 @@
       if (res.ok) {
         const d = await res.json();
         userEmail = d.email;
+        userName = d.name || "";
+        localStorage.setItem("authName", userName);
         enterApp();
         return;
       }

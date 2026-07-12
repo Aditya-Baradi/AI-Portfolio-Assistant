@@ -42,21 +42,18 @@ yfinance==0.2.66
 
 openai==1.35.0
 
-
-flask==3.0.0
-flask-cors==4.0.0
-
 # API backend (api/backend.py)
 fastapi
 uvicorn[standard]
 python-multipart
 
-# Auth (password hashing)
+# Auth (password hashing + two-factor sign-in)
 bcrypt
+pyotp
+qrcode
 
-
-streamlit==1.32.0
-
+# Fallback price source when Yahoo hiccups (Stooq)
+pandas-datareader
 
 requests==2.31.0
 python-dotenv==1.0.1

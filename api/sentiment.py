@@ -58,8 +58,11 @@ if __import__("os").getenv("SENTIMENT_BACKEND", "").lower() == "finbert":
     try:
         from transformers import pipeline as _hf_pipeline
 
+        # FINBERT_MODEL can point at a local fine-tuned folder
+        # (see scripts/train_sentiment.py) or any HF Hub model id.
+        _model_id = __import__("os").getenv("FINBERT_MODEL", "ProsusAI/finbert")
         _FINBERT = _hf_pipeline(
-            "sentiment-analysis", model="ProsusAI/finbert", top_k=None, truncation=True
+            "sentiment-analysis", model=_model_id, top_k=None, truncation=True
         )
         _BACKEND = "finbert"
     except Exception as e:  # pragma: no cover - optional path
@@ -143,6 +146,8 @@ def cached_ticker_sentiment(ticker: str, limit: int = 8, ttl: float = SENTIMENT_
         "avg_score": res["avg_score"],
         "label": res["label"],
         "n_headlines": res["n_headlines"],
+        # Kept so the headline drill-down shows exactly what was scored.
+        "headlines": res.get("headlines", []),
     }
     _SENT_CACHE[key] = (time.time(), slim)
     return slim

@@ -15,14 +15,33 @@ from api.portfolio_core import parse_portfolio_file, holdings_info, SESSION_PORT
 app = FastAPI()
 db.init_db()
 
-# Allow your frontend (index.html) to call this API
+# The backend serves the frontend itself, so only same-host origins are
+# needed. Add your real domain here when deploying.
+ALLOWED_ORIGINS = [
+    "http://127.0.0.1:8000", "http://localhost:8000",
+    "http://127.0.0.1:8010", "http://localhost:8010",  # verification port
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten in prod
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def security_headers(request, call_next):
+    resp = await call_next(request)
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    # The UI is a single file with inline styles/scripts; data: is for SVG/QRs.
+    resp.headers["Content-Security-Policy"] = (
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    )
+    return resp
 
 # Serve generated charts (equity curves etc.) for the chat UI.
 CHARTS_DIR = Path("charts")
@@ -42,6 +61,7 @@ def index_page():
 
 MAX_UPLOAD_BYTES = 2_000_000
 MAX_HOLDINGS = 500
+CHAT_DAILY_LIMIT = 50
 
 
 def _current_user(authorization: str | None) -> dict:
@@ -67,6 +87,7 @@ def _agent_session_id(user_id: int, chat_id: str) -> str:
 class Credentials(BaseModel):
     email: str
     password: str
+    name: str | None = None  # only used when creating an account
 
 
 # Brute-force protection: sliding-window limiter per client IP. In-memory is
@@ -93,15 +114,38 @@ def _check_auth_rate(request: Request):
         _AUTH_ATTEMPTS.clear()
 
 
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
 @app.post("/auth/register")
 def register(creds: Credentials, request: Request):
     _check_auth_rate(request)
     try:
-        user_id = db.register_user(creds.email, creds.password)
+        user_id = db.register_user(creds.email, creds.password, creds.name)
     except db.AuthError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    db.log_event(user_id, "register", _client_ip(request))
     token = db.issue_token(user_id)
-    return {"token": token, "email": creds.email.strip().lower()}
+    return {"token": token, "email": creds.email.strip().lower(),
+            "name": db.get_user_name(user_id)}
+
+
+# Two-factor state that only lives for a couple of minutes: pending login
+# handles (password passed, waiting for the code) and not-yet-confirmed
+# secrets during setup. In-memory is fine for a single-process app.
+_PENDING_2FA: dict = {}
+_PENDING_2FA_SETUP: dict = {}
+PENDING_2FA_TTL = 300.0
+
+
+def _prune_pending():
+    import time
+
+    now = time.time()
+    for d in (_PENDING_2FA, _PENDING_2FA_SETUP):
+        for k in [k for k, (_, ts) in d.items() if now - ts > PENDING_2FA_TTL]:
+            d.pop(k, None)
 
 
 @app.post("/auth/login")
@@ -111,8 +155,112 @@ def login(creds: Credentials, request: Request):
         user_id = db.verify_login(creds.email, creds.password)
     except db.AuthError as e:
         raise HTTPException(status_code=401, detail=str(e))
+
+    if db.get_totp_secret(user_id):
+        import secrets as _secrets
+        import time
+
+        _prune_pending()
+        pending = _secrets.token_urlsafe(24)
+        _PENDING_2FA[pending] = (user_id, time.time())
+        return {"requires_2fa": True, "pending": pending, "email": creds.email.strip().lower()}
+
+    db.log_event(user_id, "login", _client_ip(request))
     token = db.issue_token(user_id)
-    return {"token": token, "email": creds.email.strip().lower()}
+    return {"token": token, "email": creds.email.strip().lower(),
+            "name": db.get_user_name(user_id)}
+
+
+class TwoFAVerify(BaseModel):
+    pending: str
+    code: str
+
+
+@app.post("/auth/2fa/verify")
+def twofa_verify(body: TwoFAVerify, request: Request):
+    _check_auth_rate(request)
+    import time
+
+    import pyotp
+
+    _prune_pending()
+    entry = _PENDING_2FA.get(body.pending)
+    if not entry or time.time() - entry[1] > PENDING_2FA_TTL:
+        raise HTTPException(status_code=401, detail="Login expired. Start again.")
+    user_id = entry[0]
+    secret = db.get_totp_secret(user_id)
+    if not secret or not pyotp.TOTP(secret).verify(body.code.strip(), valid_window=1):
+        db.log_event(user_id, "failed_2fa", _client_ip(request))
+        raise HTTPException(status_code=401, detail="Wrong code. Try again.")
+    _PENDING_2FA.pop(body.pending, None)
+    db.log_event(user_id, "login", _client_ip(request))
+    token = db.issue_token(user_id)
+    with db._connect() as conn:
+        row = conn.execute("SELECT email, name FROM users WHERE id = ?", (user_id,)).fetchone()
+    return {"token": token, "email": row["email"] if row else "",
+            "name": row["name"] if row else None}
+
+
+@app.post("/auth/2fa/setup")
+def twofa_setup(authorization: str | None = Header(default=None)):
+    """Start enabling 2FA: returns the secret, otpauth URI, and a QR (SVG data URI)."""
+    user = _current_user(authorization)
+    import base64
+    import io
+    import time
+
+    import pyotp
+    import qrcode
+    import qrcode.image.svg
+
+    secret = pyotp.random_base32()
+    uri = pyotp.totp.TOTP(secret).provisioning_uri(
+        name=user["email"], issuer_name="Evergreen"
+    )
+    img = qrcode.make(uri, image_factory=qrcode.image.svg.SvgPathImage)
+    buf = io.BytesIO()
+    img.save(buf)
+    qr_data_uri = "data:image/svg+xml;base64," + base64.b64encode(buf.getvalue()).decode()
+
+    _prune_pending()
+    _PENDING_2FA_SETUP[user["id"]] = (secret, time.time())
+    return {"secret": secret, "uri": uri, "qr": qr_data_uri}
+
+
+class TwoFACode(BaseModel):
+    code: str
+
+
+@app.post("/auth/2fa/enable")
+def twofa_enable(body: TwoFACode, request: Request, authorization: str | None = Header(default=None)):
+    user = _current_user(authorization)
+    import pyotp
+
+    _prune_pending()
+    entry = _PENDING_2FA_SETUP.get(user["id"])
+    if not entry:
+        raise HTTPException(status_code=400, detail="Start setup first.")
+    secret = entry[0]
+    if not pyotp.TOTP(secret).verify(body.code.strip(), valid_window=1):
+        raise HTTPException(status_code=401, detail="Wrong code. Scan the QR and try again.")
+    db.set_totp_secret(user["id"], secret)
+    _PENDING_2FA_SETUP.pop(user["id"], None)
+    db.log_event(user["id"], "2fa_enabled", _client_ip(request))
+    return {"ok": True}
+
+
+class PasswordBody(BaseModel):
+    password: str
+
+
+@app.post("/auth/2fa/disable")
+def twofa_disable(body: PasswordBody, request: Request, authorization: str | None = Header(default=None)):
+    user = _current_user(authorization)
+    if not db.verify_password(user["id"], body.password):
+        raise HTTPException(status_code=401, detail="Wrong password.")
+    db.set_totp_secret(user["id"], None)
+    db.log_event(user["id"], "2fa_disabled", _client_ip(request))
+    return {"ok": True}
 
 
 @app.post("/auth/logout")
@@ -125,7 +273,191 @@ def logout(authorization: str | None = Header(default=None)):
 @app.get("/me")
 def me(authorization: str | None = Header(default=None)):
     user = _current_user(authorization)
-    return {"email": user["email"], "has_portfolio": db.get_portfolio(user["id"]) is not None}
+    return {
+        "email": user["email"],
+        "name": user.get("name"),
+        "has_portfolio": db.get_portfolio(user["id"]) is not None,
+        "twofa_enabled": db.get_totp_secret(user["id"]) is not None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Account management
+# ---------------------------------------------------------------------------
+
+class NameBody(BaseModel):
+    name: str
+
+
+@app.post("/account/name")
+def account_name(body: NameBody, authorization: str | None = Header(default=None)):
+    """Set or change the display name shown in the app."""
+    user = _current_user(authorization)
+    name = body.name.strip()[:60]
+    if not name:
+        raise HTTPException(status_code=400, detail="Please enter a name.")
+    db.set_user_name(user["id"], name)
+    return {"ok": True, "name": name}
+
+
+class ChangePassword(BaseModel):
+    current_password: str
+    new_password: str
+
+
+@app.post("/auth/change-password")
+def change_password(body: ChangePassword, request: Request,
+                    authorization: str | None = Header(default=None)):
+    """Change the password and sign out every session (a new token is returned)."""
+    user = _current_user(authorization)
+    try:
+        db.change_password(user["id"], body.current_password, body.new_password)
+    except db.AuthError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    db.log_event(user["id"], "password_changed", _client_ip(request))
+    token = db.issue_token(user["id"])
+    return {"ok": True, "token": token}
+
+
+@app.get("/account/export")
+def account_export(authorization: str | None = Header(default=None)):
+    """Everything the app stores about this user, as one JSON download."""
+    from fastapi.responses import JSONResponse
+
+    user = _current_user(authorization)
+    chats = db.list_chats(user["id"])
+    for c in chats:
+        c["messages"] = db.get_messages(c["id"])
+    data = {
+        "email": user["email"],
+        "name": user.get("name"),
+        "profile": db.get_profile(user["id"]),
+        "portfolio": db.get_portfolio(user["id"]),
+        "watchlist": db.list_watchlist(user["id"]),
+        "chats": chats,
+        "recent_activity": db.recent_events(user["id"], 100),
+    }
+    return JSONResponse(
+        content=data,
+        headers={"Content-Disposition": 'attachment; filename="portfolio-assistant-export.json"'},
+    )
+
+
+@app.post("/account/delete")
+def account_delete(body: PasswordBody, request: Request,
+                   authorization: str | None = Header(default=None)):
+    """Delete the account and everything owned by it. Requires the password."""
+    user = _current_user(authorization)
+    if not db.verify_password(user["id"], body.password):
+        raise HTTPException(status_code=401, detail="Wrong password.")
+    # remove per-chat memory files for this user (named u{id}.c{chat}...)
+    try:
+        from api.portfolio_core import MEMORY_DIR
+
+        for p in Path(MEMORY_DIR).glob(f"u{user['id']}.*"):
+            p.unlink(missing_ok=True)
+    except Exception:
+        pass
+    db.delete_user(user["id"])
+    return {"ok": True}
+
+
+@app.get("/account/activity")
+def account_activity(authorization: str | None = Header(default=None)):
+    user = _current_user(authorization)
+    return {"events": db.recent_events(user["id"], 20)}
+
+
+# ---------------------------------------------------------------------------
+# Watchlist & alerts
+# ---------------------------------------------------------------------------
+
+@app.get("/watchlist")
+def get_watchlist(authorization: str | None = Header(default=None)):
+    user = _current_user(authorization)
+    return {"tickers": db.list_watchlist(user["id"])}
+
+
+@app.post("/watchlist/{ticker}")
+def watch(ticker: str, authorization: str | None = Header(default=None)):
+    user = _current_user(authorization)
+    db.add_watch(user["id"], _valid_ticker(ticker))
+    return {"ok": True}
+
+
+@app.delete("/watchlist/{ticker}")
+def unwatch(ticker: str, authorization: str | None = Header(default=None)):
+    user = _current_user(authorization)
+    db.remove_watch(user["id"], _valid_ticker(ticker))
+    return {"ok": True}
+
+
+@app.get("/alerts")
+def get_alerts(authorization: str | None = Header(default=None)):
+    """
+    The user's alerts. Recomputed lazily at most every 6 hours: a big weekly
+    portfolio drop, and holdings whose news has turned clearly negative.
+    """
+    user = _current_user(authorization)
+    if db.alerts_due(user["id"]):
+        try:
+            _compute_alerts(user["id"])
+        except Exception:
+            pass  # alerts are best-effort; never break the page
+        db.mark_alerts_checked(user["id"])
+    alerts = db.list_alerts(user["id"])
+    return {"alerts": alerts, "unseen": sum(1 for a in alerts if not a["seen"])}
+
+
+@app.post("/alerts/seen")
+def alerts_seen(authorization: str | None = Header(default=None)):
+    user = _current_user(authorization)
+    db.mark_alerts_seen(user["id"])
+    return {"ok": True}
+
+
+def _compute_alerts(user_id: int) -> None:
+    from datetime import datetime, timedelta
+
+    from api.portfolio_core import _download_adj_close_matrix
+    from api.sentiment import cached_ticker_sentiment
+
+    pf = db.get_portfolio(user_id)
+    if not pf:
+        return
+    weights = _weights_from_pf(pf)
+    if not weights:
+        return
+
+    # 1) Portfolio dropped >5% over the last week?
+    try:
+        import numpy as np
+
+        end = datetime.today().strftime("%Y-%m-%d")
+        start = (datetime.today() - timedelta(days=14)).strftime("%Y-%m-%d")
+        prices = _download_adj_close_matrix(list(weights.keys()), start, end).ffill()
+        usable = [t for t in weights if t in prices.columns]
+        if usable and len(prices) >= 6:
+            w = np.array([weights[t] for t in usable])
+            w = w / w.sum()
+            norm = prices[usable] / prices[usable].iloc[0]
+            curve = norm.dot(w)
+            week_chg = float(curve.iloc[-1] / curve.iloc[-6] - 1.0)
+            if week_chg < -0.05:
+                db.add_alert(user_id,
+                             f"Your portfolio is down {abs(week_chg) * 100:.1f}% over the past week.")
+    except Exception:
+        pass
+
+    # 2) Any holding whose news turned clearly negative?
+    for t in list(weights.keys())[:25]:
+        try:
+            s = cached_ticker_sentiment(t)
+            if s["n_headlines"] >= 3 and s["avg_score"] <= -0.15:
+                db.add_alert(user_id, f"News about {t} has turned negative "
+                                      f"(score {s['avg_score']:+.2f}).", ticker=t)
+        except Exception:
+            continue
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +480,13 @@ def chat(req: ChatRequest, authorization: str | None = Header(default=None)):
         raise HTTPException(status_code=422, detail="Empty message.")
     if not req.chat_id:
         raise HTTPException(status_code=422, detail="Missing chat_id.")
+
+    # Every message costs real OpenAI money; cap per user per day.
+    if db.count_user_messages_today(user["id"]) >= CHAT_DAILY_LIMIT:
+        raise HTTPException(
+            status_code=429,
+            detail=f"You've hit today's limit of {CHAT_DAILY_LIMIT} messages. It resets at midnight UTC.",
+        )
 
     sid = _agent_session_id(user["id"], req.chat_id)
 
@@ -186,6 +525,7 @@ def chat_messages(chat_id: str, authorization: str | None = Header(default=None)
 
 @app.post("/upload")
 async def upload_file(
+    request: Request,
     file: UploadFile = File(...),
     authorization: str | None = Header(default=None),
 ):
@@ -222,6 +562,7 @@ async def upload_file(
 
     had_one = db.get_portfolio(user["id"]) is not None
     db.save_portfolio(user["id"], parsed)
+    db.log_event(user["id"], "portfolio_import", _client_ip(request))
 
     verb = "Updated" if had_one else "Imported"
     return {"message": f"{verb} your portfolio: {n} holdings."}
@@ -454,6 +795,7 @@ def portfolio_sentiment(authorization: str | None = Header(default=None)):
 
     # Live value per holding; fall back to the imported snapshot value.
     values = {t: meta["stored_value"] for t, meta in info.items()}
+    shares_now = {t: meta["shares"] for t, meta in info.items()}
     try:
         import pandas as pd
 
@@ -468,9 +810,22 @@ def portfolio_sentiment(authorization: str | None = Header(default=None)):
             shares = meta["shares"]
             if meta["purchase_date"] is not None and shares:
                 shares *= split_factor(splits.get(t, []), meta["purchase_date"].strftime("%Y-%m-%d"))
+            shares_now[t] = shares
             cur = float(last[t]) if t in last.index and not pd.isna(last[t]) else None
             if shares and cur:
                 values[t] = shares * cur
+    except Exception:
+        pass
+
+    # Trailing-12-month dividend income per holding (best-effort).
+    incomes = {}
+    try:
+        from api.data_cache import cached_dividends_ttm
+
+        divs = cached_dividends_ttm(list(info.keys()))
+        for t in info:
+            if shares_now.get(t) and divs.get(t):
+                incomes[t] = round(shares_now[t] * divs[t], 2)
     except Exception:
         pass
 
@@ -490,6 +845,7 @@ def portfolio_sentiment(authorization: str | None = Header(default=None)):
         {
             "ticker": t,
             "value": round(values.get(t) or 0.0, 2),
+            "income": incomes.get(t, 0.0),
             "score": res["avg_score"],
             "label": res["label"],
             "n_headlines": res["n_headlines"],
@@ -502,8 +858,146 @@ def portfolio_sentiment(authorization: str | None = Header(default=None)):
         "as_of": datetime.today().strftime("%Y-%m-%d"),
         "backend": sentiment_backend(),
         "total_value": round(sum(r["value"] or 0 for r in rows), 2),
+        "total_income": round(sum(r["income"] for r in rows), 2),
         "holdings": rows,
     }
+
+
+# ---------------------------------------------------------------------------
+# Investor profile + plan (recommendations, retirement outlook)
+# ---------------------------------------------------------------------------
+
+class ProfileUpdate(BaseModel):
+    years_to_retirement: int
+    risk_tolerance: int
+    max_volatility_pct: float
+    goal: str = "balanced"
+    monthly_contribution: float = 0.0
+    goal_amount: float = 0.0
+
+
+@app.get("/profile")
+def get_profile(authorization: str | None = Header(default=None)):
+    user = _current_user(authorization)
+    return db.get_profile(user["id"]) or {}
+
+
+@app.post("/profile")
+def set_profile(update: ProfileUpdate, authorization: str | None = Header(default=None)):
+    user = _current_user(authorization)
+    if not (1 <= update.years_to_retirement <= 60):
+        raise HTTPException(status_code=422, detail="Years to retirement must be between 1 and 60.")
+    if not (1 <= update.risk_tolerance <= 10):
+        raise HTTPException(status_code=422, detail="Risk tolerance must be between 1 and 10.")
+    if not (5 <= update.max_volatility_pct <= 80):
+        raise HTTPException(status_code=422, detail="Max volatility must be between 5% and 80%.")
+    if update.goal not in ("growth", "balanced", "income"):
+        raise HTTPException(status_code=422, detail="Goal must be growth, balanced, or income.")
+    if update.monthly_contribution < 0:
+        raise HTTPException(status_code=422, detail="Monthly contribution can't be negative.")
+    if update.goal_amount < 0:
+        raise HTTPException(status_code=422, detail="Goal amount can't be negative.")
+    profile = update.model_dump()
+    db.save_profile(user["id"], profile)
+    return {"ok": True, **profile}
+
+
+def _portfolio_mu_sigma(pf):
+    """(mu, sigma, value0) estimated from 3y of the portfolio's history, or None."""
+    try:
+        from datetime import datetime, timedelta
+
+        import numpy as np
+
+        from api.portfolio_core import _download_adj_close_matrix, _perf_metrics, RF_ANNUAL_DEFAULT
+
+        weights = _weights_from_pf(pf)
+        if not weights:
+            return None
+        end = datetime.today().strftime("%Y-%m-%d")
+        start = (datetime.today() - timedelta(days=365 * 3)).strftime("%Y-%m-%d")
+        prices = _download_adj_close_matrix(list(weights.keys()), start, end)
+        usable = [t for t in weights if t in prices.columns]
+        if not usable:
+            return None
+        w = np.array([weights[t] for t in usable])
+        w = w / w.sum()
+        rets = prices[usable].pct_change().dropna().dot(w)
+        m = _perf_metrics(rets, RF_ANNUAL_DEFAULT)
+        return m["CAGR"], m["volatility"], sum(weights.values())
+    except Exception:
+        return None
+
+
+@app.get("/plan/recommendations")
+def plan_recommendations(authorization: str | None = Header(default=None)):
+    """Stocks that fit the saved profile, plus a check on the current portfolio's risk."""
+    user = _current_user(authorization)
+    profile = db.get_profile(user["id"])
+    if not profile:
+        raise HTTPException(status_code=404, detail="Save your plan settings first.")
+
+    from api.recommend import recommend_stocks
+
+    pf = db.get_portfolio(user["id"])
+    owned = set(_weights_from_pf(pf).keys()) if pf else set()
+    try:
+        recs = recommend_stocks(profile, owned=owned)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not screen stocks: {e}")
+
+    check = None
+    if pf:
+        est = _portfolio_mu_sigma(pf)
+        if est:
+            _mu, sigma, _v0 = est
+            check = {
+                "portfolio_volatility": round(sigma, 4),
+                "max_volatility_pct": profile["max_volatility_pct"],
+                "too_risky": sigma * 100 > profile["max_volatility_pct"],
+            }
+    return {"recommendations": recs, "portfolio_check": check}
+
+
+@app.get("/plan/retirement")
+def plan_retirement(authorization: str | None = Header(default=None)):
+    """
+    Monte Carlo outlook to retirement driven by the PLAN's risk settings, so
+    moving the risk slider visibly changes the outcome.
+
+    The risk score sets the volatility to simulate (clamped by the user's max),
+    and expected return follows the classic risk/reward trade-off: more swings,
+    more expected growth (3% base + 0.40 per unit of volatility, capped at
+    15%/yr). The imported portfolio only provides the starting value.
+    """
+    user = _current_user(authorization)
+    profile = db.get_profile(user["id"])
+    if not profile:
+        raise HTTPException(status_code=404, detail="Save your plan settings first.")
+
+    from api.recommend import monthly_needed_for, retirement_paths, target_volatility
+
+    sigma = min(target_volatility(profile["risk_tolerance"]),
+                float(profile["max_volatility_pct"]) / 100.0)
+    mu = min(0.03 + 0.40 * sigma, 0.15)
+
+    value0 = 0.0
+    pf = db.get_portfolio(user["id"])
+    if pf:
+        value0 = sum(_weights_from_pf(pf).values())
+
+    goal = float(profile.get("goal_amount") or 0.0)
+    monthly = profile.get("monthly_contribution", 0.0)
+    out = retirement_paths(mu, sigma, value0, monthly,
+                           profile["years_to_retirement"], goal=goal or None)
+    out["based_on"] = "your plan"
+
+    # If the goal looks shaky, say what monthly amount would make it likely.
+    if goal > 0 and out.get("p_goal", 1.0) < 0.6:
+        needed = monthly_needed_for(goal, mu, sigma, value0, profile["years_to_retirement"])
+        if needed is not None and needed > monthly:
+            out["monthly_needed"] = needed
+    return out
 
 
 @app.get("/portfolio/whatif")
@@ -575,6 +1069,185 @@ def portfolio_whatif(authorization: str | None = Header(default=None)):
     }
 
 
+@app.get("/portfolio/rebalance")
+def portfolio_rebalance(authorization: str | None = Header(default=None)):
+    """
+    Dollar trades that move the current portfolio to the conservative
+    optimizer's target mix (same target the What-if tab compares against).
+    """
+    user = _current_user(authorization)
+    pf = db.get_portfolio(user["id"])
+    if not pf:
+        raise HTTPException(status_code=404, detail="No portfolio imported yet.")
+    weights = _weights_from_pf(pf)
+    if len(weights) < 2:
+        raise HTTPException(status_code=422, detail="Need at least 2 holdings.")
+
+    from datetime import datetime, timedelta
+
+    from api.predict_agent import run_conservative_optimization
+    from api.recommend import rebalance_trades
+
+    end = datetime.today().strftime("%Y-%m-%d")
+    start = (datetime.today() - timedelta(days=365 * 2)).strftime("%Y-%m-%d")
+    try:
+        target, _prices, _method = run_conservative_optimization(list(weights.keys()), start, end)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not optimize: {e}")
+
+    total = sum(weights.values())
+    trades = rebalance_trades(weights, target, total)
+    return {"total_value": round(total, 2), "trades": trades}
+
+
+@app.get("/portfolio/diversification")
+def portfolio_diversification(authorization: str | None = Header(default=None)):
+    """How the money is spread across stocks and sectors, with concentration warnings."""
+    user = _current_user(authorization)
+    pf = db.get_portfolio(user["id"])
+    if not pf:
+        raise HTTPException(status_code=404, detail="No portfolio imported yet.")
+    weights = _weights_from_pf(pf)
+    if not weights:
+        raise HTTPException(status_code=422, detail="Portfolio has no usable holdings.")
+
+    from api.data_cache import cached_sectors
+
+    total = sum(weights.values())
+    stock_w = sorted(((t, v / total) for t, v in weights.items()), key=lambda kv: -kv[1])
+
+    try:
+        sectors_raw = cached_sectors(list(weights.keys()))
+    except Exception:
+        sectors_raw = {}
+    sector_w: dict = {}
+    for t, v in weights.items():
+        s = sectors_raw.get(t) or "Unknown"
+        sector_w[s] = sector_w.get(s, 0.0) + v / total
+    sector_list = sorted(sector_w.items(), key=lambda kv: -kv[1])
+
+    warnings_out = []
+    if stock_w and stock_w[0][1] > 0.25:
+        warnings_out.append(
+            f"{stock_w[0][0]} is {stock_w[0][1] * 100:.0f}% of your money. If that one "
+            f"stock has a bad year, your whole portfolio does too."
+        )
+    if sector_list and sector_list[0][0] != "Unknown" and sector_list[0][1] > 0.40:
+        warnings_out.append(
+            f"{sector_list[0][1] * 100:.0f}% of your money is in {sector_list[0][0]}. "
+            f"Sectors often fall together."
+        )
+
+    return {
+        "stocks": [{"ticker": t, "weight": round(w, 4)} for t, w in stock_w],
+        "sectors": [{"sector": s, "weight": round(w, 4)} for s, w in sector_list],
+        "warnings": warnings_out,
+    }
+
+
+@app.get("/stocks/news/{ticker}")
+def stock_news(ticker: str, authorization: str | None = Header(default=None)):
+    """
+    Recent scored headlines for one ticker (the drill-down under a holding).
+    Served from the same cached fetch that produced the row's score, so the
+    headlines always match the number shown.
+    """
+    _current_user(authorization)
+    ticker = _valid_ticker(ticker)
+
+    from api.sentiment import cached_ticker_sentiment
+
+    try:
+        res = cached_ticker_sentiment(ticker)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not fetch news: {e}")
+    return {
+        "ticker": ticker,
+        "headlines": [
+            {"title": h["title"], "publisher": h["publisher"], "url": h["url"],
+             "score": h["score"], "label": h["label"]}
+            for h in res.get("headlines", [])
+        ],
+    }
+
+
+@app.get("/portfolio/history")
+def portfolio_history(authorization: str | None = Header(default=None)):
+    """
+    What actually happened: the portfolio's value since the earliest purchase,
+    against putting the same dollars into the S&P 500 (SPY) on the same dates.
+    """
+    user = _current_user(authorization)
+    pf = db.get_portfolio(user["id"])
+    if not pf:
+        raise HTTPException(status_code=404, detail="No portfolio imported yet.")
+
+    from datetime import datetime
+
+    import pandas as pd
+
+    from api.portfolio_core import _download_adj_close_matrix
+
+    info = holdings_info(pf)
+    dated = {t: m for t, m in info.items() if m["purchase_date"] is not None and m["shares"]}
+    if not dated:
+        raise HTTPException(status_code=422, detail="No purchase dates in the portfolio.")
+
+    start = min(m["purchase_date"] for m in dated.values()).strftime("%Y-%m-%d")
+    end = datetime.today().strftime("%Y-%m-%d")
+    try:
+        prices = _download_adj_close_matrix(list(dated.keys()) + ["SPY"], start, end).ffill()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Price data unavailable: {e}")
+    if getattr(prices.index, "tz", None) is not None:
+        prices.index = prices.index.tz_localize(None)
+    if "SPY" not in prices.columns or prices.empty:
+        raise HTTPException(status_code=502, detail="Benchmark data unavailable.")
+
+    # Adjusted closes bake in splits, so current shares x adj close is the
+    # position's value at any time after purchase.
+    port = pd.Series(0.0, index=prices.index)
+    spy = pd.Series(0.0, index=prices.index)
+    spy_px = prices["SPY"]
+    for t, m in dated.items():
+        if t not in prices.columns:
+            continue
+        col = prices[t]
+        buy = m["purchase_date"]
+        after = col.index >= buy
+        if not after.any():
+            continue
+        first_idx = col.index[after][0]
+        px0 = float(col.loc[first_idx])
+        if px0 <= 0 or pd.isna(px0):
+            continue
+        shares = float(m["shares"])
+        port.loc[after] += shares * col[after]
+        # Same dollars into SPY on the same day.
+        dollars = shares * px0
+        spy0 = float(spy_px.loc[first_idx])
+        if spy0 > 0:
+            spy.loc[after] += dollars * (spy_px[after] / spy0)
+
+    mask = port > 0
+    port, spy = port[mask], spy[mask]
+    if len(port) < 2:
+        raise HTTPException(status_code=422, detail="Not enough history to chart.")
+
+    step = max(1, len(port) // 300)  # keep the payload small
+    idx = list(range(0, len(port), step))
+    if idx[-1] != len(port) - 1:
+        idx.append(len(port) - 1)
+    return {
+        "dates": [port.index[i].strftime("%Y-%m-%d") for i in idx],
+        "portfolio": [round(float(port.iloc[i]), 2) for i in idx],
+        "benchmark": [round(float(spy.iloc[i]), 2) for i in idx],
+        "since": start,
+        "portfolio_now": round(float(port.iloc[-1]), 2),
+        "benchmark_now": round(float(spy.iloc[-1]), 2),
+    }
+
+
 def _stock_projection(col, ticker: str) -> dict:
     """12-month GBM projection for one ticker from ~3 years of daily closes."""
     import math
@@ -611,34 +1284,39 @@ def _stock_projection(col, ticker: str) -> dict:
 
 @app.get("/stocks/projections")
 def stocks_projections(authorization: str | None = Header(default=None)):
-    """Per-stock 12-month price projections for every holding, biggest first."""
+    """
+    Per-stock 12-month projections: watched tickers first, then every holding
+    (biggest first). Works with only a watchlist, only a portfolio, or both.
+    """
     user = _current_user(authorization)
     pf = db.get_portfolio(user["id"])
-    if not pf:
-        raise HTTPException(status_code=404, detail="No portfolio imported yet.")
-    weights = _weights_from_pf(pf)
-    if not weights:
-        raise HTTPException(status_code=422, detail="Portfolio has no usable holdings.")
+    weights = _weights_from_pf(pf) if pf else {}
+    watched = db.list_watchlist(user["id"])
+    if not weights and not watched:
+        raise HTTPException(status_code=404, detail="No portfolio or watchlist yet.")
 
     from datetime import datetime, timedelta
 
     from api.portfolio_core import _download_adj_close_matrix
 
+    tickers = list(dict.fromkeys(watched + sorted(weights, key=lambda k: -weights[k])))
     end = datetime.today().strftime("%Y-%m-%d")
     start = (datetime.today() - timedelta(days=365 * 3)).strftime("%Y-%m-%d")
     try:
-        prices = _download_adj_close_matrix(list(weights.keys()), start, end)
+        prices = _download_adj_close_matrix(tickers, start, end)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Price data unavailable: {e}")
 
     out = []
-    for t in sorted(weights, key=lambda k: -weights[k]):
+    for t in tickers:
         if t in prices.columns:
             try:
-                out.append(_stock_projection(prices[t], t))
+                proj = _stock_projection(prices[t], t)
+                proj["watched"] = t in watched
+                out.append(proj)
             except Exception:
                 continue  # not enough history for this one; skip it
-    return {"as_of": end, "stocks": out}
+    return {"as_of": end, "stocks": out, "watchlist": watched}
 
 
 @app.get("/stocks/projection/{ticker}")

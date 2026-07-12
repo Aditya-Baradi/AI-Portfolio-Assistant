@@ -72,12 +72,51 @@ def cached_download(tickers, start=None, end=None, **kwargs) -> pd.DataFrame:
                 pass  # corrupt cache entry; refetch
 
     df = yf.download(tickers, start=start, end=end, **kwargs)
+
+    if df is None or df.empty:
+        # Yahoo hiccups a few times a year. Two fallbacks, in order:
+        # a stale cache entry beats nothing, then Stooq as a second provider.
+        if path.exists():
+            try:
+                warnings.warn("Yahoo returned no data; serving stale cached prices.")
+                return pd.read_pickle(path)
+            except Exception:
+                pass
+        df = _stooq_download(tickers, start, end)
+
     if df is not None and not df.empty:
         try:
             df.to_pickle(path)
         except Exception as e:
             warnings.warn(f"Could not write price cache: {e}")
     return df
+
+
+def _stooq_download(tickers, start, end) -> pd.DataFrame:
+    """
+    Fallback price source (Stooq via pandas-datareader, free and keyless).
+    Returns a frame shaped like yf.download's MultiIndex ('Close', ticker).
+    """
+    try:
+        from pandas_datareader import data as pdr
+    except Exception:
+        return pd.DataFrame()
+    if isinstance(tickers, str):
+        tickers = [tickers]
+    closes = {}
+    for t in tickers:
+        try:
+            d = pdr.DataReader(str(t).upper(), "stooq", start=start, end=end)
+            if d is not None and not d.empty and "Close" in d.columns:
+                closes[str(t).upper()] = d["Close"].sort_index()
+        except Exception:
+            continue
+    if not closes:
+        return pd.DataFrame()
+    warnings.warn(f"Prices for {list(closes)} served by Stooq fallback.")
+    frame = pd.DataFrame(closes)
+    frame.columns = pd.MultiIndex.from_product([["Close"], frame.columns])
+    return frame
 
 
 def _load_sector_cache() -> dict:
@@ -151,6 +190,51 @@ def split_factor(events, since_iso: str) -> float:
         if d > since_iso and ratio and ratio > 0:
             factor *= float(ratio)
     return factor
+
+
+DIVIDENDS_FILE = CACHE_ROOT / "dividends.json"
+
+
+def cached_dividends_ttm(tickers) -> dict:
+    """
+    Return {ticker: trailing-12-month dividends per share}. Refreshed at most
+    once per day per ticker; stale values are kept when the fetch fails.
+    """
+    try:
+        cache = json.loads(DIVIDENDS_FILE.read_text(encoding="utf-8")) if DIVIDENDS_FILE.exists() else {}
+    except Exception:
+        cache = {}
+
+    today = date.today().isoformat()
+    out, dirty = {}, False
+    for t in tickers:
+        t = str(t).upper()
+        entry = cache.get(t)
+        if entry and entry.get("as_of") == today:
+            out[t] = entry["ttm"]
+            continue
+        ttm = 0.0
+        try:
+            s = yf.Ticker(t).dividends
+            if s is not None and len(s):
+                cutoff = pd.Timestamp(date.today()) - pd.Timedelta(days=365)
+                idx = s.index.tz_localize(None) if getattr(s.index, "tz", None) is not None else s.index
+                ttm = float(s[idx >= cutoff].sum())
+        except Exception:
+            if entry:
+                out[t] = entry["ttm"]
+                continue
+        cache[t] = {"as_of": today, "ttm": round(ttm, 4)}
+        out[t] = ttm
+        dirty = True
+
+    if dirty:
+        try:
+            CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+            DIVIDENDS_FILE.write_text(json.dumps(cache), encoding="utf-8")
+        except Exception as e:
+            warnings.warn(f"Could not write dividends cache: {e}")
+    return out
 
 
 def cached_sectors(tickers) -> dict:
