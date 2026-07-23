@@ -237,11 +237,6 @@ Never guess or hallucinate tickers or weights.
 
 
 
-llm = ChatOpenAI(
-    model="gpt-4o-mini",  
-    temperature=0,
-)
-
 tools = [
     lc_load_price_history,
     lc_compute_metrics_from_portfolio,
@@ -272,15 +267,19 @@ prompt = ChatPromptTemplate.from_messages(
     ]
 )
 
-# Build a tool-calling agent
-agent = create_tool_calling_agent(llm, tools, prompt)
+# The LLM client is built lazily so importing this module doesn't require an
+# OPENAI_API_KEY — only actually running a chat does. This keeps the app and the
+# whole test suite importable in environments without secrets (e.g. CI).
+_agent_executor = None
 
-# Wrap it in an executor so we can just call `.invoke(...)`
-agent_executor = AgentExecutor(
-    agent=agent,
-    tools=tools,
-    verbose=True,
-)
+
+def _get_agent_executor():
+    global _agent_executor
+    if _agent_executor is None:
+        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+        agent = create_tool_calling_agent(llm, tools, prompt)
+        _agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
+    return _agent_executor
 
 # ---------- Persistent running memory (file-per-user) ----------
 
@@ -426,7 +425,7 @@ def run_portfolio_agent(message: str, session_id: str = "default") -> str:
     non_tool_history = [m for m in history.messages if not isinstance(m, ToolMessage)]
     recent = non_tool_history[-8:]
 
-    result = agent_executor.invoke(
+    result = _get_agent_executor().invoke(
         {
             "input": message,
             "session_id": session_id,
