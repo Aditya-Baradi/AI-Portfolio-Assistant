@@ -1,0 +1,54 @@
+# Core dependencies: the web app + tests, WITHOUT the heavy/ conflicting RL stack.
+#
+# Why this file exists: the full requirements.txt does not resolve cleanly
+# (yfinance needs websockets>=12 but alpaca-trade-api, an eager FinRL import
+# dep, pins websockets<11). This core set installs cleanly, so CI and anyone
+# who doesn't need the reinforcement-learning optimizer can `pip install -r
+# requirements-core.txt`. Install the RL extras separately with the pinned
+# packages from requirements.txt (finrl, torch, stable-baselines3, stockstats,
+# gymnasium, exchange_calendars, alpaca-trade-api, wrds, websockets==13.1).
+#
+# The app runs without the RL stack: FinRL's import is guarded, so its absence
+# just falls back to the PyPortfolioOpt optimizer.
+
+langchain==0.1.20
+langchain-core==0.1.52
+langchain-openai==0.1.6
+
+numpy<2.0
+pandas==2.1.4
+scikit-learn==1.3.2
+scipy<1.12
+
+PyPortfolioOpt==1.5.6
+
+# News sentiment
+vaderSentiment==3.3.2
+
+# Charts
+matplotlib
+
+# Testing
+pytest
+
+yfinance==0.2.66
+
+openai==1.35.0
+
+# API backend
+fastapi
+uvicorn[standard]
+python-multipart>=0.0.18
+
+# Auth (password hashing + two-factor sign-in)
+bcrypt
+pyotp
+qrcode
+
+# Fallback price source when Yahoo hiccups (Stooq)
+pandas-datareader
+
+requests>=2.32.4
+python-dotenv>=1.2.2
+
+httpx==0.27.2

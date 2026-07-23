@@ -6,7 +6,28 @@ on:
   pull_request:
 
 jobs:
-  checks:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # Core deps only (no reinforcement-learning stack). The full
+      # requirements.txt does not resolve cleanly — see SECURITY.md — but the
+      # core set does, and it's all the test suite needs (FinRL's import is
+      # guarded, so its absence just falls back to the PyPortfolioOpt optimizer).
+      - name: Install core dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools
+          pip install -r requirements-core.txt
+
+      - name: Run tests
+        run: pytest -q
+
+  audit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -14,15 +35,11 @@ jobs:
         with:
           python-version: "3.11"
 
-      # Syntax-check every Python file without installing the heavy deps.
-      - name: Compile check
-        run: python -m compileall api
-
-      # Audit dependencies for known vulnerabilities.
-      - name: pip-audit
+      # Report known vulnerabilities. Non-blocking: the RL stack (torch etc.)
+      # carries CVEs that can't be resolved without breaking FinRL — see the
+      # dependency risk table in SECURITY.md. Scans the core set that we CAN
+      # keep current; review the output on every run.
+      - name: pip-audit (core deps)
         run: |
           pip install pip-audit
-          pip-audit -r requirements.txt --strict || true  # report, don't block (some pins are deliberate)
-
-      # NOTE: the test suite lives locally (tests/ is gitignored by choice).
-      # If tests are ever committed, add:  pip install -r requirements.txt && pytest tests/
+          pip-audit -r requirements-core.txt --strict || true

@@ -42,6 +42,13 @@ CREATE TABLE IF NOT EXISTS auth_tokens (
     user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     expires_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS email_tokens (
+    token_hash TEXT PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    purpose    TEXT NOT NULL CHECK (purpose IN ('verify', 'reset')),
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS portfolios (
     user_id    INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     data       TEXT NOT NULL,
@@ -115,6 +122,10 @@ def init_db() -> None:
             pass  # column already there
         try:
             conn.execute("ALTER TABLE users ADD COLUMN name TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already there
+        try:
+            conn.execute("ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0")
         except sqlite3.OperationalError:
             pass  # column already there
         # Tokens are now stored hashed (64 hex chars); revoke any legacy
@@ -250,6 +261,91 @@ def change_password(user_id: int, current: str, new: str) -> None:
         conn.execute("UPDATE users SET password_hash = ? WHERE id = ?",
                      (new_hash.decode("ascii"), user_id))
         conn.execute("DELETE FROM auth_tokens WHERE user_id = ?", (user_id,))
+
+
+def set_password(user_id: int, new: str) -> None:
+    """
+    Set a new password WITHOUT requiring the old one (used by the reset flow,
+    which authenticates via a single-use email token instead). Signs out every
+    session so a stolen/old token can't be reused after a reset.
+    """
+    if len(new or "") < MIN_PASSWORD_LEN:
+        raise AuthError(f"New password must be at least {MIN_PASSWORD_LEN} characters.")
+    new_hash = bcrypt.hashpw(new.encode("utf-8"), bcrypt.gensalt(rounds=12))
+    with _connect() as conn:
+        conn.execute("UPDATE users SET password_hash = ? WHERE id = ?",
+                     (new_hash.decode("ascii"), user_id))
+        conn.execute("DELETE FROM auth_tokens WHERE user_id = ?", (user_id,))
+
+
+def user_id_by_email(email: str) -> int | None:
+    """User id for an email, or None. Used by the reset flow (no enumeration)."""
+    email = (email or "").strip().lower()
+    with _connect() as conn:
+        row = conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
+    return int(row["id"]) if row else None
+
+
+def is_email_verified(user_id: int) -> bool:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT email_verified FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+    return bool(row["email_verified"]) if row else False
+
+
+def set_email_verified(user_id: int) -> None:
+    with _connect() as conn:
+        conn.execute("UPDATE users SET email_verified = 1 WHERE id = ?", (user_id,))
+
+
+# --- one-time email tokens (verification + password reset) -------------------
+
+def create_email_token(user_id: int, purpose: str, ttl_minutes: int) -> str:
+    """
+    Issue a single-use token for 'verify' or 'reset', returning the RAW token
+    (only the SHA-256 hash is stored). Any previous outstanding token of the
+    same purpose for this user is dropped, so only the newest link works.
+    """
+    if purpose not in ("verify", "reset"):
+        raise ValueError("purpose must be 'verify' or 'reset'")
+    raw = secrets.token_urlsafe(32)
+    expires = (datetime.utcnow() + timedelta(minutes=ttl_minutes)).isoformat(timespec="seconds")
+    with _connect() as conn:
+        conn.execute(
+            "DELETE FROM email_tokens WHERE user_id = ? AND purpose = ?", (user_id, purpose)
+        )
+        conn.execute(
+            """INSERT INTO email_tokens (token_hash, user_id, purpose, expires_at, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (_hash_token(raw), user_id, purpose, expires, _now()),
+        )
+    return raw
+
+
+def consume_email_token(raw_token: str, purpose: str) -> int | None:
+    """
+    Validate and BURN a token: returns its user_id if it exists, matches the
+    purpose, and hasn't expired; deletes it either way (single use). Expired
+    rows for the purpose are purged opportunistically.
+    """
+    if not raw_token:
+        return None
+    hashed = _hash_token(raw_token)
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT user_id, expires_at FROM email_tokens WHERE token_hash = ? AND purpose = ?",
+            (hashed, purpose),
+        ).fetchone()
+        if not row:
+            return None
+        conn.execute("DELETE FROM email_tokens WHERE token_hash = ?", (hashed,))
+        conn.execute(
+            "DELETE FROM email_tokens WHERE purpose = ? AND expires_at < ?", (purpose, _now())
+        )
+        if row["expires_at"] < _now():
+            return None
+        return int(row["user_id"])
 
 
 def verify_password(user_id: int, password: str) -> bool:

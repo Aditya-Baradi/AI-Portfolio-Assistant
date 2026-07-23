@@ -45,7 +45,7 @@ openai==1.35.0
 # API backend (api/backend.py)
 fastapi
 uvicorn[standard]
-python-multipart
+python-multipart>=0.0.18   # <0.0.7 CVE-2024-24762, <0.0.18 DoS advisories
 
 # Auth (password hashing + two-factor sign-in)
 bcrypt
@@ -55,7 +55,7 @@ qrcode
 # Fallback price source when Yahoo hiccups (Stooq)
 pandas-datareader
 
-requests==2.31.0
-python-dotenv==1.0.1
+requests>=2.32.4   # 2.31.0 has CVE-2024-35195 (verify-bypass on reused Session)
+python-dotenv>=1.2.2   # 1.0.1 has PYSEC-2026-2270
 
 httpx==0.27.2

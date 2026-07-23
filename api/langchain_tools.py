@@ -9,7 +9,6 @@ from pathlib import Path
 
 
 from .portfolio_core import (
-    SESSION_PORTFOLIOS,
     get_session_portfolio,
     load_price_history,
     recommend_portfolio,
@@ -23,6 +22,15 @@ from .sentiment import (
     analyze_portfolio_sentiment,
     apply_sentiment_tilt,
 )
+
+
+import threading
+
+# Cap concurrent FinRL optimizations. Each run holds a worker thread for up to
+# ~180s; without this a burst of chat requests could exhaust the server's
+# threadpool and stall the whole app. Excess requests are told to retry instead
+# of piling up.
+_FINRL_SLOTS = threading.BoundedSemaphore(2)
 
 
 def _session_weights(session_id: str) -> dict:
@@ -461,17 +469,88 @@ def lc_sentiment_tilt(weights_json: str, strength: float = 0.2) -> str:
         return json.dumps({"error": str(e)})
 
 
-@tool("finrl_optimize_portfolio")
-def finrl_optimize_portfolio(session_id: str) -> str:
+def _user_id_from_session(session_id: str):
+    """Chat session ids look like 'u{user_id}.c{chat_id}'. Pull the user_id out."""
+    sid = str(session_id or "")
+    if sid.startswith("u") and ".c" in sid:
+        try:
+            return int(sid[1:].split(".c", 1)[0])
+        except (ValueError, IndexError):
+            return None
+    return None
+
+
+@tool("lc_get_profile")
+def lc_get_profile(session_id: str) -> str:
     """
-    Run FinRL-based portfolio optimization on the user's uploaded portfolio.
+    Return the user's saved investor profile (from the Plan tab): years to
+    retirement, risk tolerance (1-10), max acceptable volatility, goal, and
+    monthly contribution. Also returns a "target_volatility" DECIMAL fraction
+    (e.g. 0.18) derived from risk tolerance and capped at the user's max — pass
+    that straight into finrl_optimize_portfolio.
+
+    Call this before recommending/optimizing a portfolio so the recommendation
+    matches the user's risk tolerance. If it returns {"has_profile": false},
+    the user hasn't saved a profile yet — ASK them for their risk tolerance and
+    acceptable volatility (or send them to the Plan tab) before optimizing.
 
     Input:
       - session_id: the active chat session identifier
+    """
+    from api import db
+
+    user_id = _user_id_from_session(session_id)
+    if user_id is None:
+        return json.dumps({"has_profile": False, "error": "Could not identify the user for this session."})
+
+    profile = db.get_profile(user_id)
+    if not profile:
+        return json.dumps({"has_profile": False,
+                           "note": "No saved profile. Ask the user for risk tolerance (1-10) and max volatility, or point them to the Plan tab."})
+
+    # Map risk tolerance (1-10) to a target annualized volatility, then cap it
+    # at the user's stated maximum. Mirrors api.recommend.target_volatility.
+    try:
+        r = max(1, min(int(profile.get("risk_tolerance", 5)), 10))
+    except (TypeError, ValueError):
+        r = 5
+    target_vol = 0.10 + 0.025 * r
+    try:
+        max_vol = float(profile.get("max_volatility_pct", 30)) / 100.0
+        if max_vol > 0:
+            target_vol = min(target_vol, max_vol)
+    except (TypeError, ValueError):
+        pass
+
+    return json.dumps({
+        "has_profile": True,
+        "years_to_retirement": profile.get("years_to_retirement"),
+        "risk_tolerance": profile.get("risk_tolerance"),
+        "max_volatility_pct": profile.get("max_volatility_pct"),
+        "goal": profile.get("goal"),
+        "monthly_contribution": profile.get("monthly_contribution"),
+        "target_volatility": round(target_vol, 4),
+    })
+
+
+@tool("finrl_optimize_portfolio")
+def finrl_optimize_portfolio(session_id: str, target_volatility: float = 0.0) -> str:
+    """
+    Run FinRL-based portfolio optimization on the user's uploaded portfolio,
+    optionally targeting the user's risk tolerance.
+
+    Input:
+      - session_id: the active chat session identifier
+      - target_volatility: desired annualized volatility as a DECIMAL fraction
+        (e.g. 0.18 for 18%). When > 0, the allocation maximizes expected return
+        at that volatility level ("max-Sharpe matched to the user's risk").
+        Pass 0 (or omit) to use the default conservative allocation.
+        Get this from lc_get_profile (use its "target_volatility" field), or
+        ask the user for their risk tolerance / acceptable volatility first.
 
     Output:
-      - text containing optimized portfolio weights, sector breakdown,
-        dollar targets, and trade plan
+      - JSON containing optimized portfolio weights, the target volatility used,
+        sector breakdown, dollar targets, and trade plan
     """
 
     pf = get_session_portfolio(session_id)
@@ -495,10 +574,17 @@ def finrl_optimize_portfolio(session_id: str) -> str:
     except Exception as e:
         return json.dumps({"error": f"Failed to write portfolio file: {e}"})
 
+    # Shed load rather than stall: if the concurrency slots are full, ask the
+    # user to retry instead of holding a thread waiting.
+    if not _FINRL_SLOTS.acquire(blocking=False):
+        return json.dumps({"error": "The optimizer is busy with other requests right now. Please try again in a minute."})
+
     try:
         # Import here to avoid import-time issues
         from api.predict_agent import optimize_portfolio_with_finrl
         from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+
+        tgt_vol = float(target_volatility) if target_volatility and target_volatility > 0 else None
 
         executor = ThreadPoolExecutor(max_workers=1)
         future = executor.submit(
@@ -510,6 +596,7 @@ def finrl_optimize_portfolio(session_id: str) -> str:
             portfolio_value=None,
             min_trade_dollars=5.0,
             fractional_ok=True,
+            target_volatility=tgt_vol,
         )
 
         try:
@@ -517,19 +604,27 @@ def finrl_optimize_portfolio(session_id: str) -> str:
             return json.dumps(result, ensure_ascii=False)
         except FutureTimeoutError:
             # Don't leave the user empty-handed: fall back to the fast
-            # max-Sharpe optimizer over the same tickers.
+            # optimizer over the same tickers, honoring the target volatility.
             try:
                 from datetime import datetime, timedelta
-                from api.predict_agent import run_pypfopt_max_sharpe, load_tickers_from_portfolio_json
+                from api.predict_agent import (
+                    run_pypfopt_max_sharpe,
+                    run_max_sharpe_target_vol,
+                    load_tickers_from_portfolio_json,
+                )
 
                 tickers, _ = load_tickers_from_portfolio_json(str(json_path), include_etfs=False)
                 end = datetime.today().strftime("%Y-%m-%d")
                 start = (datetime.today() - timedelta(days=365 * 3)).strftime("%Y-%m-%d")
-                alloc, _, method = run_pypfopt_max_sharpe(tickers, start, end)
+                if tgt_vol:
+                    alloc, _, method = run_max_sharpe_target_vol(tickers, start, end, tgt_vol)
+                else:
+                    alloc, _, method = run_pypfopt_max_sharpe(tickers, start, end)
                 return json.dumps({
-                    "method": f"{method} (RL timed out; max-Sharpe fallback)",
+                    "method": f"{method} (RL timed out; fast fallback)",
+                    "target_volatility": tgt_vol,
                     "final_allocation_weights": alloc,
-                    "note": "The RL optimization exceeded 180s; these weights come from the max-Sharpe optimizer instead.",
+                    "note": "The RL optimization exceeded 180s; these weights come from the fast optimizer instead.",
                 })
             except Exception as e2:
                 return json.dumps({"error": f"Optimization timed out and the fallback also failed: {e2}"})
@@ -540,3 +635,5 @@ def finrl_optimize_portfolio(session_id: str) -> str:
         return json.dumps({"error": f"Failed to import optimization module: {e}"})
     except Exception as e:
         return json.dumps({"error": f"Optimization failed: {str(e)}"})
+    finally:
+        _FINRL_SLOTS.release()

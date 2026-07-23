@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Evergreen</title>
-  <script>
+  <script nonce="__CSP_NONCE__">
     // apply the saved theme before the page paints, so there is no light flash
     try {
       if (localStorage.getItem("theme") === "dark") {
@@ -145,6 +145,21 @@
     .field input:focus { outline: none; border-color: var(--accent); }
     .auth-error { color: var(--danger); font-size: 0.82rem; min-height: 1.1em; }
     .auth-note { font-size: 0.75rem; color: var(--muted); text-align: center; }
+    .auth-ok { color: var(--up, #1f6f4e); font-size: 0.82rem; }
+    .auth-h { margin: 0 0 4px; font-size: 1rem; }
+    .auth-link { background: none; border: 0; color: var(--muted); font-size: 0.8rem;
+      cursor: pointer; text-align: center; width: 100%; padding: 2px; text-decoration: underline; }
+    .auth-link:hover { color: var(--ink); }
+    .verify-banner { display: flex; align-items: center; gap: 10px; justify-content: center;
+      background: #fef6e0; color: #6b4e00; border-bottom: 1px solid #f0e2b8;
+      padding: 8px 14px; font-size: 0.84rem; }
+    .verify-banner button { font: inherit; cursor: pointer; }
+    .verify-banner .vb-act { background: #6b4e00; color: #fff; border: 0; border-radius: 6px; padding: 4px 10px; }
+    .verify-banner .vb-x { background: none; border: 0; color: inherit; opacity: 0.6; }
+    @media (prefers-color-scheme: dark) {
+      .verify-banner { background: #3a3410; color: #f0d98c; border-bottom-color: #55491a; }
+      .verify-banner .vb-act { background: #f0d98c; color: #241f06; }
+    }
 
     /* ================= App shell ================= */
     .app {
@@ -1004,7 +1019,7 @@
       <span class="mark" aria-hidden="true"></span>
       <h1 class="title">Evergreen</h1>
     </div>
-    <div class="auth-card">
+    <div class="auth-card" id="mainAuthCard">
       <div class="auth-tabs">
         <button class="auth-tab active" id="tabLogin" type="button">Sign in</button>
         <button class="auth-tab" id="tabRegister" type="button">Create account</button>
@@ -1026,7 +1041,33 @@
         <input id="twofaCode" type="text" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="one-time-code" />
       </div>
       <div class="auth-error" id="authError"></div>
+      <div class="auth-ok" id="authMsg" style="display:none"></div>
       <button class="btn-primary" id="authSubmit" type="button">Sign in</button>
+      <button class="auth-link" id="forgotLink" type="button">Forgot password?</button>
+    </div>
+
+    <div class="auth-card" id="forgotCard" style="display:none">
+      <h3 class="auth-h">Reset your password</h3>
+      <p class="auth-note" style="text-align:left">Enter your email and we'll send a link to set a new password.</p>
+      <div class="field">
+        <label for="forgotEmail">Email</label>
+        <input id="forgotEmail" type="email" autocomplete="username" placeholder="you@example.com" />
+      </div>
+      <div class="auth-ok" id="forgotMsg" style="display:none"></div>
+      <button class="btn-primary" id="forgotSubmit" type="button">Send reset link</button>
+      <button class="auth-link" id="forgotBack" type="button">Back to sign in</button>
+    </div>
+
+    <div class="auth-card" id="resetCard" style="display:none">
+      <h3 class="auth-h">Choose a new password</h3>
+      <div class="field">
+        <label for="resetPassword">New password</label>
+        <input id="resetPassword" type="password" autocomplete="new-password" placeholder="at least 8 characters" />
+      </div>
+      <div class="auth-error" id="resetError"></div>
+      <div class="auth-ok" id="resetMsg" style="display:none"></div>
+      <button class="btn-primary" id="resetSubmit" type="button">Update password</button>
+      <button class="auth-link" id="resetBack" type="button">Back to sign in</button>
     </div>
     <p class="auth-note">Your password is stored securely. This app is for learning, not investment advice.</p>
   </div>
@@ -1053,6 +1094,11 @@
       </div>
       <div class="menu-pop" id="bellPop" style="display:none"></div>
       <div class="menu-pop" id="accountPop" style="display:none"></div>
+    </div>
+    <div class="verify-banner" id="verifyBanner" style="display:none">
+      <span id="verifyText">Please verify your email to secure your account.</span>
+      <button type="button" class="vb-act" id="verifyResend">Resend link</button>
+      <button type="button" class="vb-x" id="verifyDismiss" aria-label="Dismiss">✕</button>
     </div>
 
     <div class="layout">
@@ -1163,7 +1209,7 @@
     <p class="disclaimer">For learning only. Not investment advice.</p>
   </div>
 
-<script>
+<script nonce="__CSP_NONCE__">
   // Served by the backend itself; fall back to localhost when opened as a file.
   const API_BASE = location.origin.startsWith("http") ? location.origin : "http://127.0.0.1:8000";
 
@@ -1277,6 +1323,93 @@
   authPassword.addEventListener("keydown", (e) => { if (e.key === "Enter") submitAuth(); });
   document.getElementById("twofaCode").addEventListener("keydown", (e) => { if (e.key === "Enter") submitAuth(); });
 
+  // ---- password reset + email verification ----
+  let resetToken = "";
+
+  function showAuthCard(which) {
+    document.getElementById("mainAuthCard").style.display = which === "main" ? "" : "none";
+    document.getElementById("forgotCard").style.display = which === "forgot" ? "" : "none";
+    document.getElementById("resetCard").style.display = which === "reset" ? "" : "none";
+    authError.textContent = "";
+  }
+
+  document.getElementById("forgotLink").addEventListener("click", () => {
+    document.getElementById("forgotEmail").value = authEmail.value || "";
+    document.getElementById("forgotMsg").style.display = "none";
+    showAuthCard("forgot");
+  });
+  document.getElementById("forgotBack").addEventListener("click", () => showAuthCard("main"));
+  document.getElementById("resetBack").addEventListener("click", () => { resetToken = ""; showAuthCard("main"); });
+
+  async function submitForgot() {
+    const btn = document.getElementById("forgotSubmit");
+    const msg = document.getElementById("forgotMsg");
+    btn.disabled = true;
+    try {
+      const res = await fetch(API_BASE + "/auth/forgot", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: document.getElementById("forgotEmail").value }),
+      });
+      const data = await res.json().catch(() => ({}));
+      msg.textContent = data.message || "If an account exists for that email, a reset link is on its way.";
+      msg.style.display = "";
+    } catch {
+      msg.textContent = "Cannot reach the backend. Is it running?";
+      msg.style.display = "";
+    } finally { btn.disabled = false; }
+  }
+  document.getElementById("forgotSubmit").addEventListener("click", submitForgot);
+  document.getElementById("forgotEmail").addEventListener("keydown", (e) => { if (e.key === "Enter") submitForgot(); });
+
+  async function submitReset() {
+    const btn = document.getElementById("resetSubmit");
+    const err = document.getElementById("resetError");
+    err.textContent = "";
+    btn.disabled = true;
+    try {
+      const res = await fetch(API_BASE + "/auth/reset", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: resetToken, password: document.getElementById("resetPassword").value }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { err.textContent = data.detail || "Could not reset your password."; return; }
+      resetToken = "";
+      showAuthCard("main");
+      const done = document.getElementById("authMsg");
+      done.textContent = "Password updated. You can sign in now.";
+      done.style.display = "";
+    } catch {
+      err.textContent = "Cannot reach the backend. Is it running?";
+    } finally { btn.disabled = false; }
+  }
+  document.getElementById("resetSubmit").addEventListener("click", submitReset);
+  document.getElementById("resetPassword").addEventListener("keydown", (e) => { if (e.key === "Enter") submitReset(); });
+
+  async function refreshVerifyBanner() {
+    const banner = document.getElementById("verifyBanner");
+    if (sessionStorage.getItem("verifyDismissed") === "1") { banner.style.display = "none"; return; }
+    try {
+      const res = await api("/me", { headers: authHeaders() });
+      if (!res.ok) return;
+      const d = await res.json();
+      banner.style.display = d.email_verified ? "none" : "";
+    } catch {}
+  }
+  document.getElementById("verifyDismiss").addEventListener("click", () => {
+    sessionStorage.setItem("verifyDismissed", "1");
+    document.getElementById("verifyBanner").style.display = "none";
+  });
+  document.getElementById("verifyResend").addEventListener("click", async () => {
+    const t = document.getElementById("verifyText");
+    try {
+      const res = await api("/auth/verify/resend", { method: "POST", headers: authHeaders() });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok && d.already_verified) { document.getElementById("verifyBanner").style.display = "none"; return; }
+      t.textContent = res.ok ? "Sent — check your inbox for the link."
+        : (d.detail || "Couldn't send right now. Try again shortly.");
+    } catch { t.textContent = "Couldn't send right now. Try again shortly."; }
+  });
+
   function signOutLocal() {
     token = ""; userEmail = ""; userName = "";
     localStorage.removeItem("authToken");
@@ -1296,6 +1429,7 @@
     authView.classList.add("hidden");
     appView.classList.add("active");
     document.getElementById("accountEmail").textContent = userName || userEmail;
+    refreshVerifyBanner();
     loadProjection();
     loadHoldings();
     loadAlerts();
@@ -1365,8 +1499,22 @@
 
   // ---------------- markdown rendering (assistant messages) ----------------
   function escapeHtml(s) {
-    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   }
+  // True only for safe, renderable link targets. Blocks javascript:, data:, etc.
+  function safeHttpUrl(u) {
+    return /^https?:\/\//i.test(String(u || "")) ? String(u) : "";
+  }
+  // Close any open modal. Delegated so it works for buttons inside modals that
+  // are inserted later, and so no inline onclick is needed (CSP script-src has
+  // no 'unsafe-inline').
+  document.addEventListener("click", (e) => {
+    if (e.target.closest(".modal-close")) {
+      const back = document.getElementById("modalBack");
+      if (back) back.remove();
+    }
+  });
   function mdInline(s) {
     return s
       .replace(/`([^`]+)`/g, "<code>$1</code>")
@@ -1533,8 +1681,8 @@
       const raw = await res.text();
       let data;
       try { data = JSON.parse(raw); } catch { data = { message: raw }; }
-      addMessage("assistant", data.message ?? "File received.");
-      refreshPortfolio();
+      addMessage("assistant", data.message ?? data.detail ?? (res.ok ? "File received." : "Upload failed."));
+      if (res.ok) refreshPortfolio();
     } catch (err) {
       addMessage("assistant", `Upload failed: ${err?.message || err}`);
     } finally {
@@ -1769,7 +1917,7 @@
     const pct = (x) => `${x >= 0 ? "+" : ""}${(x * 100).toFixed(1)}%`;
     const cls = (x) => (x >= 0 ? "pos" : "neg");
     const topW = Object.entries(d.optimized_weights).slice(0, 4)
-      .map(([t, w]) => `${t} ${(w * 100).toFixed(0)}%`).join(", ");
+      .map(([t, w]) => `${escapeHtml(t)} ${(w * 100).toFixed(0)}%`).join(", ");
     projBox.innerHTML = `
       <div class="tiles" style="grid-template-columns:repeat(3,1fr)">
         <div class="tile"><div class="k">You</div><div class="v ${cls(d.returns.current)}">${pct(d.returns.current)}</div></div>
@@ -1871,10 +2019,11 @@
     const down = d.median[last] < d.median[0];
     const medCol = down ? "var(--danger)" : "var(--up)";
     const starred = watchedSet.has(d.ticker);
-    return `<div class="stock-card${hit ? " hit" : ""}" data-ticker="${d.ticker}">
+    const tk = escapeHtml(d.ticker);
+    return `<div class="stock-card${hit ? " hit" : ""}" data-ticker="${tk}">
       <div class="stock-head">
-        <span class="stock-tick">${d.ticker}
-          <button type="button" class="h-star${starred ? " on" : ""}" data-t="${d.ticker}"
+        <span class="stock-tick">${tk}
+          <button type="button" class="h-star${starred ? " on" : ""}" data-t="${tk}"
             title="${starred ? "Remove from" : "Add to"} your watchlist">${starred ? "★" : "☆"}</button>
         </span>
         <span class="stock-price">${fmtPrice(d.price)} now</span>
@@ -2267,13 +2416,13 @@
         const ret2 = r.est_annual_return * 100;
         return `<div class="rec-row">
           <div class="rec-top">
-            <span class="rec-tick">${r.ticker}</span>
-            <span class="rec-sector">${r.sector}</span>
+            <span class="rec-tick">${escapeHtml(r.ticker)}</span>
+            <span class="rec-sector">${escapeHtml(r.sector)}</span>
             ${r.owned ? '<span class="rec-own">YOU OWN IT</span>' : ""}
             <span class="rec-ret ${ret2 >= 0 ? "pos" : "neg"}">${ret2 >= 0 ? "+" : ""}${ret2.toFixed(0)}%/yr</span>
             <span class="rec-vol">${(r.volatility * 100).toFixed(0)}% swings</span>
           </div>
-          <div class="rec-why">${r.why}</div>
+          <div class="rec-why">${escapeHtml(r.why)}</div>
         </div>`;
       }).join("");
       html += `
@@ -2309,13 +2458,15 @@
       const mood = h.label === "Bullish" ? "Mostly good news"
         : h.label === "Bearish" ? "Mostly bad news" : "Mixed news";
       const divNote = h.income ? ` Pays about ${money(h.income)}/yr in dividends.` : "";
-      return `<div class="holding-row" data-ticker="${h.ticker}" title="${(noNews ? "No recent news found"
+      const tk = escapeHtml(h.ticker);
+      const sigLabel = escapeHtml(String(h.signal).toUpperCase());
+      return `<div class="holding-row" data-ticker="${tk}" title="${(noNews ? "No recent news found"
           : `${mood} (${h.n_headlines} recent headlines)`) + divNote} Click for headlines.">
-        <span class="h-tick">${h.ticker}</span>
+        <span class="h-tick">${tk}</span>
         <span class="h-val">${money(h.value)}</span>
         <span class="h-score ${cls}">${scoreLabel}</span>
-        <span class="h-sig ${sig}">${h.signal.toUpperCase()}</span>
-        <button type="button" class="h-del" data-t="${h.ticker}" title="Remove ${h.ticker} from your portfolio">✕</button>
+        <span class="h-sig ${sig}">${sigLabel}</span>
+        <button type="button" class="h-del" data-t="${tk}" title="Remove ${tk} from your portfolio">✕</button>
       </div>`;
     }).join("");
 
@@ -2388,10 +2539,12 @@
       box.innerHTML = d.headlines.length
         ? d.headlines.map((h) => {
             const cls = h.score > 0.005 ? "up" : h.score < -0.005 ? "down" : "";
+            const title = escapeHtml(h.title);
+            const url = safeHttpUrl(h.url);
             return `<div class="headline">
               <span class="h-s ${cls}">${h.score >= 0 ? "+" : ""}${h.score.toFixed(2)}</span>
-              ${h.url ? `<a href="${h.url}" target="_blank" rel="noopener noreferrer">${h.title}</a>` : h.title}
-              <span class="h-src">${h.publisher}</span>
+              ${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${title}</a>` : title}
+              <span class="h-src">${escapeHtml(h.publisher)}</span>
             </div>`;
           }).join("")
         : '<div class="headline">No recent headlines.</div>';
@@ -2492,7 +2645,7 @@
     bellPop.innerHTML = '<div class="pop-title">Alerts</div>'
       + (alertsData.length
         ? alertsData.map((a) => `
-            <div class="alert-row${a.seen ? "" : " unseen"}">${a.message}
+            <div class="alert-row${a.seen ? "" : " unseen"}">${escapeHtml(a.message)}
               <div class="alert-time">${friendlyDate(a.created_at.slice(0, 10))}</div>
             </div>`).join("")
         : '<div class="alert-row">Nothing to report. You\'ll see a note here if your portfolio drops sharply or a stock\'s news turns negative.</div>');
@@ -2552,7 +2705,7 @@
         <div class="field"><label>Name</label><input id="nmVal" type="text" maxlength="60" autocomplete="name" value="${userName.replace(/"/g, "&quot;")}"></div>
         <div class="modal-err" id="nmErr"></div>
         <div class="modal-actions">
-          <button class="btn-quiet" onclick="document.getElementById('modalBack').remove()">Cancel</button>
+          <button class="btn-quiet modal-close">Cancel</button>
           <button class="btn-primary" id="nmGo">Save</button>
         </div>`);
       document.getElementById("nmVal").focus();
@@ -2600,13 +2753,13 @@
             "2fa_enabled": "Two-factor turned on", "2fa_disabled": "Two-factor turned off",
             failed_2fa: "Wrong two-factor code" };
           rows = d.events.length ? d.events.map((ev) => `
-            <div class="act-row"><span class="k">${label[ev.kind] || ev.kind}</span>
-              <span class="t">${ev.ip || ""} · ${ev.created_at.slice(0, 16).replace("T", " ")}</span></div>`).join("")
+            <div class="act-row"><span class="k">${escapeHtml(label[ev.kind] || ev.kind)}</span>
+              <span class="t">${escapeHtml(ev.ip || "")} · ${escapeHtml(ev.created_at.slice(0, 16).replace("T", " "))}</span></div>`).join("")
             : '<div class="act-row">No activity recorded yet.</div>';
         }
       } catch {}
       showModal(`<h3>Recent activity</h3>${rows}
-        <div class="modal-actions"><button class="btn-quiet" onclick="document.getElementById('modalBack').remove()">Close</button></div>`);
+        <div class="modal-actions"><button class="btn-quiet modal-close">Close</button></div>`);
     });
 
     document.getElementById("miPassword").addEventListener("click", () => {
@@ -2616,7 +2769,7 @@
         <div class="field"><label>New password (at least 8 characters)</label><input id="cpNew" type="password" autocomplete="new-password"></div>
         <div class="modal-err" id="cpErr"></div>
         <div class="modal-actions">
-          <button class="btn-quiet" onclick="document.getElementById('modalBack').remove()">Cancel</button>
+          <button class="btn-quiet modal-close">Cancel</button>
           <button class="btn-primary" id="cpGo">Change password</button>
         </div>`);
       document.getElementById("cpGo").addEventListener("click", async () => {
@@ -2646,7 +2799,7 @@
           <div class="field"><label>Confirm with your password</label><input id="tfPw" type="password"></div>
           <div class="modal-err" id="tfErr"></div>
           <div class="modal-actions">
-            <button class="btn-quiet" onclick="document.getElementById('modalBack').remove()">Cancel</button>
+            <button class="btn-quiet modal-close">Cancel</button>
             <button class="btn-primary" id="tfGo">Turn off</button>
           </div>`);
         document.getElementById("tfGo").addEventListener("click", async () => {
@@ -2677,7 +2830,7 @@
             <input id="tfCode" inputmode="numeric" maxlength="6" placeholder="123456"></div>
           <div class="modal-err" id="tfErr"></div>
           <div class="modal-actions">
-            <button class="btn-quiet" onclick="document.getElementById('modalBack').remove()">Cancel</button>
+            <button class="btn-quiet modal-close">Cancel</button>
             <button class="btn-primary" id="tfGo">Turn on</button>
           </div>`);
         document.getElementById("tfGo").addEventListener("click", async () => {
@@ -2705,7 +2858,7 @@
           <input id="delPw" type="password"></div>
         <div class="modal-err" id="delErr"></div>
         <div class="modal-actions">
-          <button class="btn-quiet" onclick="document.getElementById('modalBack').remove()">Cancel</button>
+          <button class="btn-quiet modal-close">Cancel</button>
           <button class="btn-primary" id="delGo" style="background:var(--danger);border-color:var(--danger)">Delete forever</button>
         </div>`);
       document.getElementById("delGo").addEventListener("click", async () => {
@@ -2727,6 +2880,23 @@
 
   // ---------------- boot ----------------
   (async function boot() {
+    const params = new URLSearchParams(location.search);
+    // Arrived from a password-reset email link: show the "new password" card.
+    if (params.get("reset")) {
+      resetToken = params.get("reset");
+      history.replaceState(null, "", location.pathname);
+      showAuthCard("reset");
+      return; // stay on the auth view to set a new password
+    }
+    // Arrived back from an email-verification link.
+    if (params.get("verified") !== null) {
+      const v = params.get("verified");
+      history.replaceState(null, "", location.pathname);
+      const msg = document.getElementById("authMsg");
+      msg.textContent = v === "1" ? "Email verified — you're all set."
+        : "That verification link is invalid or has expired.";
+      msg.style.display = "";
+    }
     if (!token) return; // show auth view
     try {
       const res = await fetch(API_BASE + "/me", { headers: authHeaders() });

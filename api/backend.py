@@ -1,19 +1,22 @@
 # backend.py (inside api/)
 
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, File, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from api import db
 from api.langchain_agent import run_portfolio_agent
-from api.portfolio_core import parse_portfolio_file, holdings_info, SESSION_PORTFOLIOS
+from api.portfolio_core import parse_portfolio_file, holdings_info
 
 app = FastAPI()
 db.init_db()
+
+logger = logging.getLogger("evergreen")
 
 # The backend serves the frontend itself, so only same-host origins are
 # needed. Add your real domain here when deploying.
@@ -32,13 +35,21 @@ app.add_middleware(
 
 @app.middleware("http")
 async def security_headers(request, call_next):
+    # A fresh per-request nonce lets the single-file UI keep its inline <script>
+    # blocks WITHOUT 'unsafe-inline', so injected script can't execute even if
+    # something slips past output-escaping. index_page() stamps this same nonce
+    # into the page's <script> tags. Inline styles stay allowed (they can't
+    # exfiltrate anything, and there are hundreds of style="" attributes).
+    import secrets
+
+    nonce = secrets.token_urlsafe(16)
+    request.state.csp_nonce = nonce
     resp = await call_next(request)
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["X-Frame-Options"] = "DENY"
     resp.headers["Referrer-Policy"] = "no-referrer"
-    # The UI is a single file with inline styles/scripts; data: is for SVG/QRs.
     resp.headers["Content-Security-Policy"] = (
-        "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        f"default-src 'self'; script-src 'self' 'nonce-{nonce}'; "
         "style-src 'self' 'unsafe-inline'; img-src 'self' data:"
     )
     return resp
@@ -56,8 +67,12 @@ INDEX_FILE = Path(__file__).resolve().parent / "index.html"
 
 
 @app.get("/")
-def index_page():
-    return FileResponse(INDEX_FILE)
+def index_page(request: Request):
+    # Inject the request's CSP nonce into the page's <script> tags so they match
+    # the Content-Security-Policy header set by the security_headers middleware.
+    nonce = getattr(request.state, "csp_nonce", "")
+    html = INDEX_FILE.read_text(encoding="utf-8").replace("__CSP_NONCE__", nonce)
+    return HTMLResponse(html)
 
 MAX_UPLOAD_BYTES = 2_000_000
 MAX_HOLDINGS = 500
@@ -100,7 +115,7 @@ _AUTH_ATTEMPTS: dict = {}
 def _check_auth_rate(request: Request):
     import time
 
-    ip = request.client.host if request.client else "unknown"
+    ip = _client_ip(request)
     now = time.time()
     recent = [t for t in _AUTH_ATTEMPTS.get(ip, []) if now - t < AUTH_RATE_WINDOW]
     if len(recent) >= AUTH_RATE_LIMIT:
@@ -115,6 +130,21 @@ def _check_auth_rate(request: Request):
 
 
 def _client_ip(request: Request) -> str:
+    """
+    Real client IP, correct behind our reverse proxy.
+
+    In production the app sits behind Caddy on an internal-only port (compose
+    uses `expose`, not `ports`), so nothing but Caddy can reach it. Caddy sets
+    X-Forwarded-For and APPENDS the true connecting IP as the last entry, so we
+    take the RIGHTMOST value: a client can prepend a spoofed IP, but cannot
+    forge the entry Caddy adds. With no proxy (local dev) there is no such
+    header and we fall back to the socket peer.
+    """
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        parts = [p.strip() for p in xff.split(",") if p.strip()]
+        if parts:
+            return parts[-1]
     return request.client.host if request.client else "unknown"
 
 
@@ -126,9 +156,27 @@ def register(creds: Credentials, request: Request):
     except db.AuthError as e:
         raise HTTPException(status_code=400, detail=str(e))
     db.log_event(user_id, "register", _client_ip(request))
+    _send_verification(user_id, creds.email.strip().lower())
     token = db.issue_token(user_id)
     return {"token": token, "email": creds.email.strip().lower(),
             "name": db.get_user_name(user_id)}
+
+
+def _send_verification(user_id: int, email: str) -> bool:
+    """Issue a verification token and email it. Best-effort: never blocks the
+    caller if email delivery fails (the user can request a resend later)."""
+    from api import email_send
+
+    try:
+        raw = db.create_email_token(user_id, "verify", ttl_minutes=60 * 24)
+        email_send.send_verification_email(email, raw)
+        return True
+    except Exception:
+        # Log server-side so a config/network/provider failure is diagnosable
+        # (the caller only sees a generic message). A common cause is the server
+        # process starting before RESEND_API_KEY was set in .env — restart it.
+        logger.exception("Verification email failed for user %s", user_id)
+        return False
 
 
 # Two-factor state that only lives for a couple of minutes: pending login
@@ -278,7 +326,78 @@ def me(authorization: str | None = Header(default=None)):
         "name": user.get("name"),
         "has_portfolio": db.get_portfolio(user["id"]) is not None,
         "twofa_enabled": db.get_totp_secret(user["id"]) is not None,
+        "email_verified": db.is_email_verified(user["id"]),
     }
+
+
+# --- email verification + password reset ------------------------------------
+
+@app.get("/verify")
+def verify_email(token: str):
+    """Land here from the verification email link, then bounce to the app."""
+    user_id = db.consume_email_token(token, "verify")
+    if not user_id:
+        return RedirectResponse(url="/?verified=0", status_code=303)
+    db.set_email_verified(user_id)
+    return RedirectResponse(url="/?verified=1", status_code=303)
+
+
+@app.post("/auth/verify/resend")
+def resend_verification(request: Request, authorization: str | None = Header(default=None)):
+    user = _current_user(authorization)
+    _check_auth_rate(request)
+    if db.is_email_verified(user["id"]):
+        return {"ok": True, "already_verified": True}
+    if not _send_verification(user["id"], user["email"]):
+        raise HTTPException(status_code=502, detail="Couldn't send the email right now. Try again shortly.")
+    return {"ok": True}
+
+
+class ForgotBody(BaseModel):
+    email: str
+
+
+@app.post("/auth/forgot")
+def forgot_password(body: ForgotBody, request: Request):
+    """
+    Start a password reset. Always returns 200 with the same message whether or
+    not the email exists, so this can't be used to enumerate accounts.
+    """
+    _check_auth_rate(request)
+    from api import email_send
+
+    email = (body.email or "").strip().lower()
+    user_id = db.user_id_by_email(email)
+    if user_id:
+        try:
+            raw = db.create_email_token(user_id, "reset", ttl_minutes=30)
+            email_send.send_password_reset_email(email, raw)
+            db.log_event(user_id, "password_reset_requested", _client_ip(request))
+        except Exception:
+            # Log server-side (never revealed to the caller — no enumeration).
+            logger.exception("Password-reset email failed for user %s", user_id)
+    return {"ok": True, "message": "If an account exists for that email, a reset link is on its way."}
+
+
+class ResetBody(BaseModel):
+    token: str
+    password: str
+
+
+@app.post("/auth/reset")
+def reset_password(body: ResetBody, request: Request):
+    _check_auth_rate(request)
+    user_id = db.consume_email_token(body.token, "reset")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="This reset link is invalid or has expired.")
+    try:
+        db.set_password(user_id, body.password)
+    except db.AuthError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    # A password reset proves control of the inbox, so treat the email as verified.
+    db.set_email_verified(user_id)
+    db.log_event(user_id, "password_changed", _client_ip(request))
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
@@ -490,12 +609,9 @@ def chat(req: ChatRequest, authorization: str | None = Header(default=None)):
 
     sid = _agent_session_id(user["id"], req.chat_id)
 
-    # Make the user's stored portfolio visible to the agent's tools under
-    # this chat's session id.
-    pf = db.get_portfolio(user["id"])
-    if pf:
-        SESSION_PORTFOLIOS[sid] = pf
-
+    # The agent's tools resolve the portfolio straight from the DB using the
+    # user id encoded in this session id (see get_session_portfolio), so there's
+    # nothing to copy into process memory here.
     db.touch_chat(user["id"], req.chat_id, first_message=req.message)
     db.add_message(req.chat_id, "user", req.message)
 
@@ -534,10 +650,18 @@ async def upload_file(
     CSV/JSON file. Stored in SQL so it persists across sessions and restarts.
     """
     user = _current_user(authorization)
-    content = await file.read()
 
+    limit_mb = MAX_UPLOAD_BYTES // 1_000_000
+    # Reject an oversized upload up front via Content-Length, before reading it
+    # into memory (a client can omit/understate this, so we also cap the read).
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"File too large. Limit is {limit_mb} MB.")
+
+    # Read at most the limit + 1 byte; if we get that extra byte, it's too big.
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(content) > MAX_UPLOAD_BYTES:
-        return {"message": f"File too large ({len(content)} bytes). Limit is {MAX_UPLOAD_BYTES // 1_000_000} MB."}
+        raise HTTPException(status_code=413, detail=f"File too large. Limit is {limit_mb} MB.")
 
     from api.portfolio_core import extract_raw_rows, looks_like_transactions, replay_transactions
 

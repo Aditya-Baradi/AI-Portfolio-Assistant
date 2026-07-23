@@ -48,6 +48,28 @@ def _window_is_closed(end) -> bool:
     return end_d < date.today()
 
 
+def _frame_is_degenerate(df, threshold: float = 0.4) -> bool:
+    """
+    True if a price frame is mostly empty — the signature of a flaky bulk
+    yfinance download that returned data for only a couple of tickers and NaN
+    for the rest. Price frames are normally dense (every row has a close for
+    every column), so a non-NaN cell ratio below `threshold` means the download
+    is broken and must not be cached or served. A single sparse column (e.g. a
+    newly listed ticker in a large basket) barely moves the ratio, so legitimate
+    data is not flagged.
+    """
+    try:
+        if df is None or df.empty:
+            return False  # emptiness is handled separately
+        total = df.size
+        if total == 0:
+            return False
+        non_na = int(df.notna().to_numpy().sum())
+        return (non_na / total) < threshold
+    except Exception:
+        return False
+
+
 def cached_download(tickers, start=None, end=None, **kwargs) -> pd.DataFrame:
     """
     Drop-in wrapper around yf.download with on-disk caching.
@@ -67,7 +89,11 @@ def cached_download(tickers, start=None, end=None, **kwargs) -> pd.DataFrame:
         )
         if fresh:
             try:
-                return pd.read_pickle(path)
+                cached = pd.read_pickle(path)
+                # Ignore a poisoned (mostly-NaN) cache entry — a partial bulk
+                # download that got persisted. Falling through refetches it.
+                if not _frame_is_degenerate(cached):
+                    return cached
             except Exception:
                 pass  # corrupt cache entry; refetch
 
@@ -84,7 +110,10 @@ def cached_download(tickers, start=None, end=None, **kwargs) -> pd.DataFrame:
                 pass
         df = _stooq_download(tickers, start, end)
 
-    if df is not None and not df.empty:
+    # Only persist complete data. A partial/degenerate bulk download must never
+    # poison the cache, or it silently starves every downstream consumer
+    # (projections, metrics, backtests, recommendations).
+    if df is not None and not df.empty and not _frame_is_degenerate(df):
         try:
             df.to_pickle(path)
         except Exception as e:

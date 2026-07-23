@@ -23,6 +23,7 @@ from api.langchain_tools import (
     compute_total_value,
     lc_price_on_date_tool,
     finrl_optimize_portfolio,
+    lc_get_profile,
     portfolio_holdings_count,
     lc_ticker_sentiment,
     lc_portfolio_sentiment,
@@ -95,21 +96,44 @@ If the user asks about risk, volatility, beta, drawdown, Sharpe, CAGR, performan
   portfolio outperformed or underperformed the S&P 500, and cite excess return/CAGR, alpha, and beta.
 - You MUST NOT answer purely in natural language without calling the appropriate tool.
 
-3. RECOMMENDATIONS (UPDATED TOOL SIGNATURE):
-When the user asks for an optimized or recommended portfolio:
-- Collect tickers, start, end, constraints_json.
-- MUST call ONLY:
+3. RECOMMENDATIONS / PORTFOLIO OPTIMIZATION (RISK-MATCHED, MANDATORY FLOW):
+When the user asks for a recommended, optimized, or "best" portfolio/allocation, or
+"what should I hold", you MUST optimize it to match their risk tolerance:
 
-  lc_recommend_portfolio(
-      tickers=[...],
-      start=...,
-      end=...,
-      constraints_json=...
-  )
+STEP 1 - Get the risk target:
+   Call lc_get_profile(session_id).
+   - If it returns has_profile=true, use its "target_volatility" field (a decimal
+     fraction like 0.18) as the risk target.
+   - If it returns has_profile=false (no saved profile), DO NOT guess. ASK the user
+     a brief clarifying question, e.g. "To match your risk tolerance, roughly how
+     much year-to-year swing are you comfortable with — conservative (~10-12%),
+     moderate (~18%), or aggressive (~30%)? Or set it on the Plan tab." Wait for
+     their answer, then convert it to a decimal fraction yourself.
 
-- MUST NOT pass prices_json.
+STEP 2 - Optimize:
+   Call finrl_optimize_portfolio(session_id, target_volatility=<the decimal fraction>).
+   This runs the FinRL + max-Sharpe optimizer that maximizes expected return at the
+   user's chosen volatility. This is the ONLY tool to use for recommendations —
+   do NOT use lc_recommend_portfolio for this.
+   (finrl_optimize_portfolio requires an uploaded portfolio; if there is none, tell
+   the user to import their portfolio first.)
+
+STEP 3 - Summarize:
+   Report the recommended weights, the target volatility the portfolio was built to,
+   the method used, sector breakdown, and the trade plan. Give educational reasoning.
+   Never dump raw JSON. Frame as educational, not personalized investment advice.
+
+- lc_recommend_portfolio is a legacy equal-weight helper. Only use it if the user
+  explicitly gives an ad-hoc ticker list to weight and does NOT want risk matching.
 - MUST NOT call lc_load_price_history during recommendations.
-- After the tool returns, summarize recommended weights and provide educational reasoning.
+
+3a. ASK WHEN UNCLEAR (applies to every request):
+If a request is missing information you need to act correctly — the risk target for a
+recommendation, which tickers/dates for an ad-hoc analysis, or an ambiguous goal —
+ask ONE short, specific clarifying question and wait for the answer instead of
+guessing or silently failing. Only ask when it actually changes what you would do;
+if a sensible default exists (e.g. last 12 months for dates), state the default and
+proceed.
 
 4. PRICE HISTORY OUTPUT CONTROL (CRITICAL):
 You MUST NOT call lc_load_price_history unless the user explicitly asks for:
@@ -226,6 +250,7 @@ tools = [
     compute_total_value,
     lc_price_on_date_tool,
     finrl_optimize_portfolio,
+    lc_get_profile,
     portfolio_holdings_count,
     lc_ticker_sentiment,
     lc_portfolio_sentiment,
@@ -263,6 +288,32 @@ MEMORY_DIR = "chat_memory"
 os.makedirs(MEMORY_DIR, exist_ok=True)
 
 _session_store: Dict[str, ChatMessageHistory] = {}
+
+# Age out stale on-disk chat memory so the directory can't grow without bound.
+# Chat history also lives in the SQL database, so pruning an idle session's file
+# only resets the agent's in-memory scratchpad for that (long-abandoned) chat.
+CHAT_MEMORY_TTL_DAYS = 30
+_last_prune = 0.0
+
+
+def _prune_memory_dir() -> None:
+    import time
+
+    global _last_prune
+    now = time.time()
+    if now - _last_prune < 3600:  # at most once an hour per process
+        return
+    _last_prune = now
+    cutoff = now - CHAT_MEMORY_TTL_DAYS * 86400
+    try:
+        for p in Path(MEMORY_DIR).glob("*.json"):
+            try:
+                if p.stat().st_mtime < cutoff:
+                    p.unlink()
+            except OSError:
+                pass
+    except Exception:
+        pass
 
 
 def _sanitize_session_id(session_id: str) -> str:
@@ -337,6 +388,7 @@ def _load_persistent_history(session_id: str) -> List[BaseMessage]:
 
 
 def _save_persistent_history(session_id: str, history: ChatMessageHistory) -> None:
+    _prune_memory_dir()
     path = _memory_path(session_id)
     try:
         safe_messages = [m for m in history.messages if not isinstance(m, ToolMessage)]

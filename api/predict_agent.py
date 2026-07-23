@@ -533,6 +533,83 @@ def run_pypfopt_max_sharpe(tickers, start_date, end_date):
 
 
 
+def run_max_sharpe_target_vol(tickers, start_date, end_date, target_vol: float):
+    """
+    Maximize return at (or below) a target annualized volatility — the
+    "max-Sharpe that matches the user's risk tolerance" allocation.
+
+    Uses PyPortfolioOpt's efficient_risk(target_volatility), which finds the
+    highest-return long-only portfolio whose volatility equals target_vol. If
+    the target is below the achievable minimum (efficient_risk raises), we fall
+    back to the min-variance portfolio; if PyPortfolioOpt is unavailable, we use
+    a SciPy solver that maximizes return subject to vol <= target_vol.
+
+    Returns (weights_dict, prices_df, method_str).
+    """
+    target_vol = float(target_vol)
+    if target_vol <= 0:
+        raise ValueError("target_vol must be positive.")
+
+    prices = _download_price_matrix(tickers, start_date, end_date)
+    prices = prices.dropna(axis=0, how="all").dropna(axis=1, how="any")
+    if prices.empty:
+        raise ValueError("No price data for the given tickers/dates.")
+
+    try:
+        expected_returns = import_module("pypfopt.expected_returns")
+        risk_models = import_module("pypfopt.risk_models")
+        EfficientFrontier = import_module("pypfopt.efficient_frontier").EfficientFrontier
+
+        mu = expected_returns.mean_historical_return(prices)
+        S = risk_models.CovarianceShrinkage(prices).ledoit_wolf()
+
+        ef = EfficientFrontier(mu, S)
+        try:
+            ef.efficient_risk(target_volatility=target_vol)
+            method = f"max-return@vol={target_vol:.0%}"
+        except Exception:
+            # Target below the achievable frontier — take the least-risk portfolio.
+            ef = EfficientFrontier(mu, S)
+            ef.min_volatility()
+            method = f"min-vol (target {target_vol:.0%} below frontier)"
+
+        cleaned = {t: w for t, w in ef.clean_weights().items() if w > 0}
+        total = sum(cleaned.values())
+        if total <= 0:
+            raise ValueError("Optimizer returned zero weights.")
+        return {t: round(w / total, 6) for t, w in cleaned.items()}, prices, method
+
+    except Exception as e1:
+        warnings.warn(f"PyPortfolioOpt efficient_risk failed ({e1}); using SciPy fallback.")
+
+    import scipy.optimize as opt
+
+    rets = prices.pct_change().dropna()
+    mu = (rets.mean() * 252.0).values
+    Sigma = (rets.cov() * 252.0).values
+    cols = prices.columns.tolist()
+    n = len(cols)
+
+    def neg_return(w):
+        return -(w @ mu)
+
+    cons = (
+        {"type": "eq", "fun": lambda w: np.sum(w) - 1.0},
+        # vol <= target: keep target_vol^2 - w'Σw >= 0
+        {"type": "ineq", "fun": lambda w: target_vol ** 2 - (w @ Sigma @ w)},
+    )
+    bounds = [(0.0, 1.0)] * n
+    w0 = np.ones(n) / n
+    res = opt.minimize(neg_return, w0, method="SLSQP", bounds=bounds,
+                       constraints=cons, options={"maxiter": 500})
+    w = res.x if res.success else w0
+    w = np.maximum(w, 0.0)
+    s = w.sum()
+    w = w / s if s > 0 else np.ones(n) / n
+    cleaned = {cols[i]: round(float(w[i]), 6) for i in range(n)}
+    return cleaned, prices, f"scipy max-return@vol<={target_vol:.0%}"
+
+
 def _blend_allocations(rl: dict, ms: dict, rl_weight: float) -> dict:
     """
     Convex-combine two allocation dicts: rl_weight*RL + (1-rl_weight)*max-Sharpe.
@@ -625,7 +702,8 @@ def optimize_portfolio_with_finrl(json_path:str,
                                   portfolio_value: float | None = None,
                                   min_trade_dollars: float = 5.0,
                                   fractional_ok: bool = True,
-                                  blend_rl_weight: float = 0.5):
+                                  blend_rl_weight: float = 0.5,
+                                  target_volatility: float | None = None):
     #
     tickers, mv_map = load_tickers_from_portfolio_json(json_path, include_etfs=include_etfs)
     if not tickers:
@@ -636,18 +714,27 @@ def optimize_portfolio_with_finrl(json_path:str,
 
     sector_map = get_sector_map(tickers)
 
-    # Always compute the fast anchor first (cheap). Conservative (min-vol +
-    # weight cap + 1/N shrinkage) — it beat max-Sharpe decisively in the
-    # out-of-sample walk-forward test.
+    # Compute the fast anchor first (cheap). When the caller supplies a target
+    # volatility (from the user's risk profile), anchor to the max-return-at-
+    # that-vol portfolio; otherwise use the conservative (min-vol + weight cap +
+    # 1/N shrinkage) allocation that beat max-Sharpe in the walk-forward test.
     ms_alloc = None
-    try:
-        ms_alloc, _, anchor_method = run_conservative_optimization(tickers, start_date, end_date)
-    except Exception as e:
-        warnings.warn(f"Conservative anchor failed ({e}); trying max-Sharpe.")
+    if target_volatility and target_volatility > 0:
         try:
-            ms_alloc, _, anchor_method = run_pypfopt_max_sharpe(tickers, start_date, end_date)
-        except Exception as e2:
-            warnings.warn(f"max-Sharpe anchor failed ({e2}).")
+            ms_alloc, _, anchor_method = run_max_sharpe_target_vol(
+                tickers, start_date, end_date, target_volatility
+            )
+        except Exception as e:
+            warnings.warn(f"Target-vol anchor failed ({e}); trying conservative.")
+    if ms_alloc is None:
+        try:
+            ms_alloc, _, anchor_method = run_conservative_optimization(tickers, start_date, end_date)
+        except Exception as e:
+            warnings.warn(f"Conservative anchor failed ({e}); trying max-Sharpe.")
+            try:
+                ms_alloc, _, anchor_method = run_pypfopt_max_sharpe(tickers, start_date, end_date)
+            except Exception as e2:
+                warnings.warn(f"max-Sharpe anchor failed ({e2}).")
 
     allocation, method = None, None
     if FINRL_AVAILABLE:
@@ -706,8 +793,9 @@ def optimize_portfolio_with_finrl(json_path:str,
 
     result = {
         "method": method,
+        "target_volatility": target_volatility if (target_volatility and target_volatility > 0) else None,
         "tickers": tickers,
-        "final_allocation_weights": allocation,  
+        "final_allocation_weights": allocation,
         "sector_allocation_percent": sector_alloc_pct,  
         "current_sector_allocation_percent": current_sector_pct,  
         "missing_gics_sectors_recommended": missing_recommended,

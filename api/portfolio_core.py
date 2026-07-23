@@ -38,17 +38,42 @@ def save_session_portfolio(session_id: str, parsed: Dict) -> None:
         pass  # persistence is best-effort; the in-memory copy still works
 
 
+def _user_id_from_session(session_id: str):
+    """Chat session ids look like 'u{user_id}.c{chat_id}'. Pull the user_id out."""
+    sid = str(session_id or "")
+    if sid.startswith("u") and ".c" in sid:
+        try:
+            return int(sid[1:].split(".c", 1)[0])
+        except (ValueError, IndexError):
+            return None
+    return None
+
+
 def get_session_portfolio(session_id: str):
-    """Fetch a session's portfolio from memory, falling back to disk."""
+    """
+    Fetch a session's portfolio. The database is the source of truth: the
+    session id encodes the user, so we read straight from there. This works
+    across multiple workers and — unlike the old module-global cache — can't
+    grow unbounded. Falls back to the legacy in-memory/disk copies only for a
+    non-standard session id (e.g. tests, or portfolios saved before this change).
+    """
+    uid = _user_id_from_session(session_id)
+    if uid is not None:
+        try:
+            from api import db
+            pf = db.get_portfolio(uid)
+            if pf:
+                return pf
+        except Exception:
+            pass  # fall through to legacy caches
+
     pf = SESSION_PORTFOLIOS.get(session_id)
     if pf:
         return pf
     path = MEMORY_DIR / f"{_sanitize_session_id(session_id)}.portfolio.json"
     if path.exists():
         try:
-            pf = json.loads(path.read_text(encoding="utf-8"))
-            SESSION_PORTFOLIOS[session_id] = pf
-            return pf
+            return json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             return None
     return None
@@ -97,8 +122,23 @@ def load_price_history(tickers, start: str, end: str) -> pd.DataFrame:
     if data is None or data.empty:
         raise RuntimeError(f"No price data returned for {tickers} between {start} and {end}")
 
-    if "Adj Close" in data.columns:
-        data = data["Adj Close"]
+    # Select just the close prices, leaving columns = tickers. Modern yfinance
+    # defaults to auto_adjust=True, which returns a (field, ticker) MultiIndex
+    # with an already-adjusted "Close" and no "Adj Close"; older layouts expose
+    # "Adj Close". Handle both, plus the flat single-ticker case.
+    if isinstance(data.columns, pd.MultiIndex):
+        fields = set(data.columns.get_level_values(0))
+        field = "Adj Close" if "Adj Close" in fields else ("Close" if "Close" in fields else None)
+        if field is None:
+            raise RuntimeError("Downloaded data has no Close/Adj Close prices.")
+        data = data[field]
+    else:
+        field = "Adj Close" if "Adj Close" in data.columns else ("Close" if "Close" in data.columns else None)
+        if field is not None:
+            data = data[field]
+            if isinstance(data, pd.Series):
+                tkr = tickers[0] if isinstance(tickers, (list, tuple)) else tickers
+                data = data.to_frame(name=str(tkr).upper())
 
     return data
 
@@ -550,6 +590,55 @@ def _download_adj_close_matrix(tickers, start, end) -> pd.DataFrame:
         data = data.to_frame()
 
     data = data.dropna(axis=1, how="all").sort_index()
+
+    # Repair partial bulk downloads. yfinance occasionally returns full history
+    # for some tickers in a batch and almost nothing for the rest. Re-fetch the
+    # starved (or entirely missing) tickers one at a time — a single-ticker
+    # download has its own cache key and usually comes back clean — then splice
+    # them in. Only a clear coverage disparity triggers this, so a batch of
+    # uniformly short (legitimately young) histories won't cause needless
+    # refetches.
+    counts = data.notna().sum()
+    best = int(counts.max()) if len(counts) else 0
+    if best > 0:
+        missing = [t for t in tickers if t not in data.columns]
+        starved = [t for t in data.columns if int(counts[t]) < 0.5 * best]
+        need = list(dict.fromkeys(missing + starved))
+
+        repaired = {}
+        for t in need:
+            try:
+                one = cached_download(t, start=start, end=end, progress=False, auto_adjust=True)
+                if one is None or one.empty:
+                    continue
+                if isinstance(one.columns, pd.MultiIndex):
+                    lvl0 = set(one.columns.get_level_values(0))
+                    f = "Close" if "Close" in lvl0 else ("Adj Close" if "Adj Close" in lvl0 else None)
+                    if f is None:
+                        continue
+                    s = one[f]
+                    if getattr(s, "ndim", 1) > 1:
+                        s = s.iloc[:, 0]
+                else:
+                    f = "Close" if "Close" in one.columns else ("Adj Close" if "Adj Close" in one.columns else None)
+                    if f is None:
+                        continue
+                    s = one[f]
+                s = s.dropna()
+                if len(s) > int(counts.get(t, 0)):
+                    repaired[t] = s
+            except Exception:
+                continue  # this one just stays sparse/absent
+
+        if repaired:
+            new_index = data.index
+            for s in repaired.values():
+                new_index = new_index.union(s.index)
+            data = data.reindex(new_index)
+            for t, s in repaired.items():
+                data[t] = s.reindex(new_index)
+            data = data.dropna(axis=1, how="all").sort_index()
+
     return data
 
 
