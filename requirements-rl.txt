@@ -1,0 +1,44 @@
+# OPTIONAL RESEARCH ENVIRONMENT: FinRL + PPO.
+#
+#     python -m venv .venv-rl
+#     .venv-rl/bin/pip install -r requirements-rl.txt
+#
+# Do NOT install this file together with requirements.txt. FinRL eagerly pulls
+# alpaca-trade-api, which requires websockets<11, while the production
+# market-data stack requires a modern websockets release. The public web image
+# intentionally excludes FinRL and falls back to PyPortfolioOpt.
+#
+# ---------------------------------------------------------------------------
+# READ THIS BEFORE INSTALLING
+# ---------------------------------------------------------------------------
+#
+# 1. This manifest is validated by CI as an ISOLATED resolver target. It is not
+#    a supported in-process extension to the public web service. Integrating it
+#    in production requires a separately deployed worker and API boundary.
+#
+# 2. THIS SET CARRIES THE PROJECT'S CVE EXPOSURE. torch 2.2.2 alone has ~40
+#    advisories, nearly all in torch.load / deserialisation of UNTRUSTED
+#    checkpoints. This app only ever trains and loads its own models, so the
+#    practical exposure is low — but if you install this, you are accepting that
+#    assessment. See the dependency table in SECURITY.md.
+#
+# 3. Installing this is a deliberate choice for offline research. For a public
+#    deployment, use only requirements.txt.
+
+finrl==0.3.7
+
+# FinRL 0.3.7 runtime deps (not pulled in automatically by its metadata).
+# gymnasium/stable-baselines3/torch power the RL agent; stockstats builds the
+# technical indicators; exchange_calendars/alpaca-trade-api/wrds satisfy FinRL's
+# eager data-source imports (only the configured provider is used at runtime).
+gymnasium==0.29.1
+stable-baselines3==2.3.2
+torch==2.2.2
+stockstats==0.6.8
+exchange_calendars==4.13.2
+alpaca-trade-api==3.2.0
+wrds==3.5.0
+
+# Satisfies alpaca-trade-api. Deliberately incompatible with the production
+# yfinance environment, which is why CI resolves this manifest in isolation.
+websockets==10.4

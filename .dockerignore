@@ -1,0 +1,48 @@
+# Deny by default. Only files explicitly copied by Dockerfile enter the build
+# context, so local credentials, databases, virtualenvs, caches, and Git
+# history can never be uploaded to a remote builder.
+**
+
+!.dockerignore
+!Dockerfile
+!requirements.txt
+
+!api/
+!api/**
+
+!scripts/
+!scripts/backup_db.py
+!scripts/healthcheck.py
+
+# These files are served by the legal routes.
+!LICENSE
+!NOTICE
+!PRIVACY.md
+!TERMS.md
+
+# Defense in depth after the broad source allow-list above. These patterns stay
+# excluded even if a developer accidentally creates them under api/.
+**/.env
+**/.env.*
+**/.evergreen_key
+**/*.key
+**/*.pem
+**/*.crt
+**/*.p12
+**/*.pfx
+**/*.db
+**/*.db-*
+**/*.db.*
+**/*.sqlite
+**/*.sqlite-*
+**/*.sqlite.*
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/.pytest_cache/
+**/.ruff_cache/
+**/cache/
+**/charts/
+**/chat_memory/
+**/results/
+**/tests/

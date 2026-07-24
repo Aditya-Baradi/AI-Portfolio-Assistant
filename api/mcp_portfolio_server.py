@@ -7,7 +7,6 @@ from mcp.server.fastmcp import FastMCP
 from api.portfolio_core import (
     load_price_history,
     compute_portfolio_metrics,
-    recommend_portfolio,
     backtest_vs_benchmark,
 )
 
@@ -65,22 +64,6 @@ async def mcp_backtest_vs_benchmark(
     weights = json.loads(weights_json)
     result = backtest_vs_benchmark(weights, start, end, benchmark=benchmark)
     return json.dumps(result)
-
-
-@server.tool()
-async def mcp_recommend_portfolio(
-    tickers: List[str],
-    start: str,
-    end: str,
-    constraints_json: str = "{}",
-) -> str:
-    """
-    Recommend portfolio weights given tickers, a date range, and constraints.
-    """
-    prices = load_price_history(tickers, start, end)
-    constraints = json.loads(constraints_json) if constraints_json else {}
-    weights = recommend_portfolio(prices, constraints)
-    return json.dumps(weights)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,6 @@
 """Tests for the SQL auth/portfolio/chat layer (offline, temp database)."""
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
 
 import api.db as db
@@ -11,6 +13,15 @@ def temp_db(tmp_path, monkeypatch):
 
 
 class TestAuth:
+    def test_database_permissions_are_owner_only_on_posix(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(db, "_IS_POSIX", True)
+        monkeypatch.setattr(db.os, "chmod", lambda path, mode: calls.append((path, mode)))
+        with db._connect():
+            pass
+        assert calls
+        assert all(mode == 0o600 for _path, mode in calls)
+
     def test_register_and_login(self):
         uid = db.register_user("Alice@Example.com", "hunter2secret")
         assert db.verify_login("alice@example.com", "hunter2secret") == uid  # case-insensitive email
@@ -57,6 +68,51 @@ class TestAuth:
     def test_bad_token_rejected(self):
         assert db.user_for_token("not-a-real-token") is None
         assert db.user_for_token("") is None
+
+    def test_email_is_canonicalized_and_validated(self):
+        uid = db.register_user("  Test@BÜCHER.de ", "password123")
+        assert db.get_user_identity(uid)["email"] == "test@xn--bcher-kva.de"
+        assert db.verify_login("TEST@bücher.de", "password123") == uid
+        for bad in ("missing-at", "a@localhost", ".a@example.com", "a..b@example.com"):
+            with pytest.raises(db.AuthError):
+                db.register_user(bad, "password123")
+
+    def test_policy_acceptance_is_versioned_and_exportable(self):
+        uid = db.register_user(
+            "policy@example.com",
+            "password123",
+            accepted_policy_version="v1",
+        )
+        assert db.has_policy_acceptance(uid, "v1")
+        db.record_policy_acceptance(uid, "v2")
+        assert [r["policy_version"] for r in db.list_policy_acceptances(uid)] == [
+            "v1",
+            "v2",
+        ]
+
+    def test_rotation_is_idempotent_during_concurrent_grace(self):
+        uid = db.register_user("rotate-db@example.com", "password123")
+        original = db.issue_token(uid)
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            successors = list(pool.map(lambda _i: db.rotate_token(original), range(12)))
+
+        assert None not in successors
+        assert len(set(successors)) == 1
+        successor = successors[0]
+        assert db.user_for_token(original) is None
+        assert db.user_for_token(successor)["id"] == uid
+        with db._connect() as conn:
+            rows = conn.execute(
+                "SELECT COUNT(*) FROM auth_tokens WHERE user_id = ?",
+                (uid,),
+            ).fetchone()[0]
+        assert rows <= db.MAX_SESSIONS_PER_USER + 1
+
+        # Revoking the successor revokes its short-lived predecessor family,
+        # so the old token cannot resurrect the session during grace.
+        db.revoke_token(successor)
+        assert db.rotate_token(original) is None
 
 
 class TestPortfolio:
@@ -107,3 +163,114 @@ class TestChats:
         db.touch_chat(u1, "chat-x", "mine")
         assert db.chat_belongs_to_user(u1, "chat-x")
         assert not db.chat_belongs_to_user(u2, "chat-x")
+
+    def test_cross_user_chat_reads_and_writes_are_rejected(self):
+        owner = db.register_user("chat-owner@example.com", "password123")
+        other = db.register_user("chat-other@example.com", "password123")
+        db.touch_chat(owner, "shared-id", "private title")
+        db.add_message(owner, "shared-id", "user", "private message")
+
+        with pytest.raises(db.ChatOwnershipError):
+            db.touch_chat(other, "shared-id", "attacker title")
+        with pytest.raises(db.ChatOwnershipError):
+            db.add_message(other, "shared-id", "user", "attacker message")
+        with pytest.raises(db.ChatOwnershipError):
+            db.get_messages_for_user(other, "shared-id")
+        with pytest.raises(db.ChatOwnershipError):
+            db.begin_chat_turn(other, "shared-id", "attacker turn", 50)
+
+        assert db.get_messages_for_user(owner, "shared-id")[0]["content"] == "private message"
+        assert db.count_user_messages_today(other) == 0
+
+    def test_quota_reservation_is_atomic_and_charged_to_actor(self):
+        uid = db.register_user("quota@example.com", "password123")
+        assert db.begin_chat_turn(uid, "quota-chat", "one", 2) == 1
+        assert db.begin_chat_turn(uid, "quota-chat", "two", 2) == 2
+        with pytest.raises(db.ChatQuotaError):
+            db.begin_chat_turn(uid, "quota-chat", "three", 2)
+        assert db.count_user_messages_today(uid) == 2
+
+    def test_chat_content_is_encrypted_at_rest(self):
+        from api import crypto
+
+        uid = db.register_user("opaque-chat@example.com", "password123")
+        db.touch_chat(uid, "opaque", "my secret title")
+        db.add_message(uid, "opaque", "user", "my secret message")
+        with db._connect() as conn:
+            title = conn.execute(
+                "SELECT title FROM chats WHERE id = 'opaque'"
+            ).fetchone()[0]
+            content = conn.execute(
+                "SELECT content FROM messages WHERE chat_id = 'opaque'"
+            ).fetchone()[0]
+        assert crypto.is_encrypted(title) and "secret title" not in title
+        assert crypto.is_encrypted(content) and "secret message" not in content
+        assert db.list_chats(uid)[0]["title"] == "my secret title"
+        assert db.get_messages_for_user(uid, "opaque")[0]["content"] == "my secret message"
+
+    def test_chat_retention_prunes_complete_turns(self, monkeypatch):
+        monkeypatch.setattr(db, "MAX_CHAT_TURNS", 3)
+        uid = db.register_user("retention@example.com", "password123")
+        db.touch_chat(uid, "retained", "turn zero")
+        for i in range(5):
+            db.append_chat_turn(uid, "retained", f"user {i}", f"assistant {i}")
+        messages = db.get_messages_for_user(uid, "retained")
+        assert [(m["role"], m["content"]) for m in messages] == [
+            ("user", "user 2"),
+            ("assistant", "assistant 2"),
+            ("user", "user 3"),
+            ("assistant", "assistant 3"),
+            ("user", "user 4"),
+            ("assistant", "assistant 4"),
+        ]
+
+    def test_scrub_migration_is_durably_marked_and_removes_plaintext(self):
+        from pathlib import Path
+
+        uid = db.register_user("scrub@example.com", "password123")
+        marker = b"FORENSIC-PLAINTEXT-MARKER-9d6109"
+        with db._connect() as conn:
+            conn.execute(
+                "DELETE FROM maintenance_migrations WHERE name = ?",
+                (db.ENCRYPTION_SCRUB_MIGRATION,),
+            )
+            conn.execute(
+                """INSERT INTO profiles (user_id, data, updated_at)
+                   VALUES (?, ?, ?)""",
+                (uid, marker.decode("ascii"), db._now()),
+            )
+
+        assert db.encrypt_existing_rows() == 1
+        with db._connect() as conn:
+            assert conn.execute(
+                "SELECT 1 FROM maintenance_migrations WHERE name = ?",
+                (db.ENCRYPTION_SCRUB_MIGRATION,),
+            ).fetchone()
+
+        paths = [Path(db.DB_PATH), Path(str(db.DB_PATH) + "-wal")]
+        raw = b"".join(path.read_bytes() for path in paths if path.exists())
+        assert marker not in raw
+
+
+class TestEmailTokenConcurrency:
+    def test_reset_token_can_only_be_consumed_once_concurrently(self):
+        uid = db.register_user("reset-race@example.com", "password123")
+        raw = db.create_email_token(uid, "reset", ttl_minutes=30)
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(
+                pool.map(lambda _i: db.consume_email_token(raw, "reset"), range(4))
+            )
+        assert results.count(uid) == 1
+        assert results.count(None) == 3
+
+
+class TestAlertCheckConcurrency:
+    def test_only_one_worker_claims_due_recomputation(self):
+        uid = db.register_user("alert-race@example.com", "password123")
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            claims = list(
+                pool.map(lambda _i: db.claim_alert_check(uid), range(16))
+            )
+
+        assert claims.count(True) == 1
+        assert claims.count(False) == 15

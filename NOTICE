@@ -1,0 +1,53 @@
+Evergreen — AI Portfolio Assistant
+Copyright 2026 Aditya Baradi
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+--------------------------------------------------------------------------
+
+WHY APACHE-2.0
+
+Apache-2.0 was chosen over MIT for two reasons that matter for software that
+touches people's money:
+
+  * Section 7 (Disclaimer of Warranty) and Section 8 (Limitation of Liability)
+    are explicit and detailed, where MIT's equivalent is one sentence. For a
+    tool that outputs portfolio analytics, a clearly worded disclaimer of
+    liability is worth having.
+  * Section 3 grants an express patent licence and terminates it for anyone who
+    brings a patent suit over the work.
+
+If you would rather keep this proprietary — for example to commercialise it
+exclusively — replace LICENSE with your own terms before publishing. Once a
+permissive licence has been published for a given commit, it cannot be revoked
+for that commit.
+
+--------------------------------------------------------------------------
+
+THIRD-PARTY MARKET DATA
+
+This software can be configured to read market data from several providers.
+The licence above covers this software only, NOT the data. Data licensing is
+your responsibility as the operator:
+
+  * yfinance / Yahoo Finance — this project has not established rights for
+    public display, redistribution, or commercial use. The startup audit
+    therefore refuses this adapter in production.
+  * Stooq — keyless development fallback; the project makes no public-use or
+    redistribution-rights claim for its data.
+  * Tiingo, Polygon.io — the repository supplies adapters, not a data licence.
+    An API key or paid plan is insufficient by itself. Before public use, the
+    operator must obtain written contract rights covering the exact display,
+    redistribution, derived-output, caching, and end-user use involved.
+
+See api/market_data.py and SECURITY.md for details.

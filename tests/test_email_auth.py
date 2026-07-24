@@ -2,6 +2,16 @@
 import pytest
 
 import api.db as db
+from api.routers.legal import POLICY_VERSION
+
+
+def registration(email: str, password: str = "password123") -> dict:
+    return {
+        "email": email,
+        "password": password,
+        "accept_terms": True,
+        "policy_version": POLICY_VERSION,
+    }
 
 
 @pytest.fixture(autouse=True)
@@ -81,13 +91,15 @@ def client(monkeypatch):
     import api.email_send as es
     from api import backend
 
+    from api import state
+
     sent = {}
     monkeypatch.setattr(es, "send_verification_email", lambda to, raw: sent.__setitem__("verify", (to, raw)))
     monkeypatch.setattr(es, "send_password_reset_email", lambda to, raw: sent.__setitem__("reset", (to, raw)))
-    # The per-IP auth rate limiter is a module global shared across the whole
-    # process; every TestClient request looks like the same IP, so clear it so
-    # one test's attempts don't 429 the next.
-    backend._AUTH_ATTEMPTS.clear()
+    # Rate-limit and lockout counters live in the shared state backend, which is
+    # process-wide. Every TestClient request looks like the same IP, so start
+    # each test from a clean backend or one test's attempts 429 the next.
+    state.reset_backend()
     c = TestClient(backend.app)
     c.sent = sent
     return c
@@ -95,14 +107,14 @@ def client(monkeypatch):
 
 class TestForgotResetEndpoints:
     def test_forgot_does_not_enumerate(self, client):
-        client.post("/auth/register", json={"email": "known@example.com", "password": "password123"})
+        client.post("/auth/register", json=registration("known@example.com"))
         unknown = client.post("/auth/forgot", json={"email": "ghost@example.com"})
         known = client.post("/auth/forgot", json={"email": "known@example.com"})
         assert unknown.status_code == known.status_code == 200
         assert unknown.json() == known.json()  # identical response, can't tell them apart
 
     def test_full_reset_flow(self, client):
-        client.post("/auth/register", json={"email": "user@example.com", "password": "password123"})
+        client.post("/auth/register", json=registration("user@example.com"))
         client.post("/auth/forgot", json={"email": "user@example.com"})
         raw = client.sent["reset"][1]
         r = client.post("/auth/reset", json={"token": raw, "password": "newpassword456"})
@@ -114,7 +126,7 @@ class TestForgotResetEndpoints:
                            json={"email": "user@example.com", "password": "newpassword456"}).status_code == 200
 
     def test_reset_marks_email_verified(self, client):
-        reg = client.post("/auth/register", json={"email": "v@example.com", "password": "password123"}).json()
+        reg = client.post("/auth/register", json=registration("v@example.com")).json()
         h = {"Authorization": "Bearer " + reg["token"]}
         # a reset link is not yet consumed; verify flag still false
         assert client.get("/me", headers=h).json()["email_verified"] is False
@@ -126,9 +138,17 @@ class TestForgotResetEndpoints:
         assert client.get("/me", headers={"Authorization": "Bearer " + tok}).json()["email_verified"] is True
 
     def test_verify_endpoint(self, client):
-        client.post("/auth/register", json={"email": "w@example.com", "password": "password123"})
+        client.post("/auth/register", json=registration("w@example.com"))
         raw = client.sent["verify"][1]
         r = client.get(f"/verify?token={raw}", follow_redirects=False)
         assert r.status_code == 303 and "verified=1" in r.headers["location"]
         bad = client.get(f"/verify?token={raw}", follow_redirects=False)  # reused
         assert "verified=0" in bad.headers["location"]
+
+    def test_post_verify_consumes_fragment_token_as_json(self, client):
+        client.post("/auth/register", json=registration("post-verify@example.com"))
+        raw = client.sent["verify"][1]
+        r = client.post("/auth/verify", json={"token": raw})
+        assert r.status_code == 200
+        assert r.json() == {"ok": True, "email_verified": True}
+        assert client.post("/auth/verify", json={"token": raw}).status_code == 400

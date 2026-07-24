@@ -1,6 +1,7 @@
 """Tests for portfolio file parsing and weight derivation (offline)."""
 import json
 
+import pandas as pd
 import pytest
 
 from api.portfolio_core import (
@@ -9,6 +10,7 @@ from api.portfolio_core import (
     save_session_portfolio,
     get_session_portfolio,
     SESSION_PORTFOLIOS,
+    live_portfolio_valuation,
 )
 
 
@@ -121,21 +123,62 @@ class TestSplitFactor:
 
 
 class TestSessionPersistence:
-    def test_roundtrip_via_disk(self, tmp_path, monkeypatch):
-        import api.portfolio_core as pc
-
-        monkeypatch.setattr(pc, "MEMORY_DIR", tmp_path)
+    def test_roundtrip_is_process_local_only(self):
         pf = {"holdings": [{"ticker": "AAPL", "shares": 1, "current_dollars": 150.0}]}
         save_session_portfolio("tester@x.com", pf)
+        assert get_session_portfolio("tester@x.com") == pf
 
-        # Simulate a restart: wipe the in-memory map, disk copy must survive.
-        SESSION_PORTFOLIOS.clear()
-        loaded = get_session_portfolio("tester@x.com")
-        assert loaded == pf
-
-    def test_missing_session_returns_none(self, tmp_path, monkeypatch):
-        import api.portfolio_core as pc
-
-        monkeypatch.setattr(pc, "MEMORY_DIR", tmp_path)
+    def test_restart_does_not_read_plaintext_disk(self):
         SESSION_PORTFOLIOS.clear()
         assert get_session_portfolio("nobody") is None
+
+
+class TestLiveValuation:
+    def test_current_shares_are_not_split_adjusted_again(self):
+        pf = {"holdings": [{
+            "ticker": "NVDA",
+            "shares": 10,
+            "purchase_date": "2020-01-01",
+            "current_dollars": 100,
+        }]}
+        prices = pd.DataFrame(
+            {"NVDA": [120.0]},
+            index=pd.to_datetime(["2026-07-22"]),
+        )
+        out = live_portfolio_valuation(pf, price_frame=prices)
+        assert out["values"]["NVDA"] == pytest.approx(1200.0)
+        assert out["shares"]["NVDA"] == pytest.approx(10.0)
+
+    def test_stale_component_falls_back_and_global_date_is_oldest(self):
+        pf = {"holdings": [
+            {"ticker": "AAA", "shares": 1, "current_dollars": 10},
+            {"ticker": "BBB", "shares": 1, "current_dollars": 20},
+        ]}
+        idx = pd.bdate_range("2026-07-13", periods=8)
+        prices = pd.DataFrame(
+            {"AAA": [10.0] + [float("nan")] * 7, "BBB": range(20, 28)},
+            index=idx,
+        )
+        out = live_portfolio_valuation(
+            pf, price_frame=prices, max_stale_market_days=3
+        )
+        assert out["fallback_tickers"] == ["AAA"]
+        assert out["ticker_as_of"]["AAA"] == "2026-07-13"
+        assert out["as_of"] == idx[-1].strftime("%Y-%m-%d")
+
+    def test_global_date_uses_oldest_accepted_component(self):
+        pf = {"holdings": [
+            {"ticker": "AAA", "shares": 1},
+            {"ticker": "BBB", "shares": 1},
+        ]}
+        idx = pd.bdate_range("2026-07-20", periods=4)
+        prices = pd.DataFrame(
+            {"AAA": [10.0, 11.0, float("nan"), float("nan")],
+             "BBB": [20.0, 21.0, 22.0, 23.0]},
+            index=idx,
+        )
+        out = live_portfolio_valuation(
+            pf, price_frame=prices, max_stale_market_days=3
+        )
+        assert out["fallback_tickers"] == []
+        assert out["as_of"] == idx[1].strftime("%Y-%m-%d")

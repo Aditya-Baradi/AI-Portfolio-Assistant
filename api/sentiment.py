@@ -1,25 +1,30 @@
 """
 News + sentiment analysis for the portfolio agent.
 
-Pulls recent financial-news headlines for a ticker (via yfinance, sourced from
-Yahoo Finance / its syndicated outlets) and scores their sentiment. Sentiment
+Pulls recent financial-news headlines for a ticker from the configured market
+data provider (see api/market_data.py) and scores their sentiment. Sentiment
 uses VADER when available, augmented with a finance-specific lexicon; if VADER
 is not installed it falls back to a small built-in lexicon scorer so the module
 always works.
 
+IMPORTANT: headline sentiment is a measure of news TONE, not a price forecast
+and not a recommendation. `signal_from_score` deliberately returns descriptive
+tone bands ("Positive tone" / "Mixed" / "Negative tone") rather than
+Buy/Hold/Sell — a lexicon score over a handful of headlines is nowhere near
+strong enough evidence to justify a trade instruction, and presenting it as one
+would be both bad statistics and a regulatory problem.
+
 NOTE on X/Twitter: scraping X is intentionally NOT used here. It requires a paid
 API, violates the ToS for scraping, and is noisy/unreliable. Reputable financial
-news (Yahoo Finance and its providers: Reuters, Bloomberg, Barron's, MarketWatch,
-etc.) gives cleaner, higher-signal input for investment decisions.
+news gives cleaner, higher-signal input.
 """
 from __future__ import annotations
 
+import math
+import threading
 import warnings
+from collections import OrderedDict
 from datetime import datetime, timezone
-
-import yfinance as yf
-
-warnings.filterwarnings("ignore")
 
 # --- sentiment backend -----------------------------------------------------
 # Finance-tuned lexicon boosters (VADER is general-purpose and under-weights
@@ -106,29 +111,47 @@ def score_text(text: str) -> float:
 
 def label_from_score(score: float, pos_th: float = 0.15, neg_th: float = -0.15) -> str:
     if score >= pos_th:
-        return "Bullish"
+        return "Positive language"
     if score <= neg_th:
-        return "Bearish"
-    return "Neutral"
+        return "Negative language"
+    return "Neutral language"
+
+
+# Minimum headlines before we'll characterise tone at all. Below this the
+# average is dominated by one or two articles and means nothing.
+MIN_HEADLINES_FOR_TONE = 3
 
 
 def signal_from_score(score: float, n_headlines: int) -> str:
     """
-    Trading-desk style read of the news flow: Buy when coverage is bullish,
-    Sell when bearish, Hold when neutral or when there is no news to go on.
+    Describe the TONE of recent coverage. Deliberately not a trade signal.
+
+    This used to return Buy / Hold / Sell. It no longer does, for two reasons:
+
+    1. Statistically, an average VADER score over a handful of headlines is a
+       weak, high-variance measure with no established predictive relationship
+       to forward returns. Rendering it as "Buy" implied evidence we don't have.
+    2. Legally, publishing per-security buy/sell instructions to the public is
+       the kind of thing that attracts securities regulators. Describing the
+       news tone is reporting; telling someone to buy is advice.
+
+    Returns one of: "Positive tone", "Mixed", "Negative tone", "No data".
     """
-    if not n_headlines:
-        return "Hold"
+    if not n_headlines or n_headlines < MIN_HEADLINES_FOR_TONE:
+        return "No data"
     if score >= 0.15:
-        return "Buy"
+        return "Positive tone"
     if score <= -0.15:
-        return "Sell"
-    return "Hold"
+        return "Negative tone"
+    return "Mixed"
 
 
 # Headline sentiment barely moves minute to minute, but fetching news is a
 # network round-trip per ticker — cache the aggregate for a while.
-_SENT_CACHE: dict[str, tuple[float, dict]] = {}
+_SENT_CACHE: OrderedDict[str, tuple[float, dict]] = OrderedDict()
+_SENT_INFLIGHT: dict[str, threading.Event] = {}
+_SENT_LOCK = threading.RLock()
+SENTIMENT_CACHE_MAX_ENTRIES = 512
 SENTIMENT_TTL_SECONDS = 900  # 15 minutes
 
 
@@ -137,20 +160,65 @@ def cached_ticker_sentiment(ticker: str, limit: int = 8, ttl: float = SENTIMENT_
     import time
 
     key = ticker.strip().upper()
-    hit = _SENT_CACHE.get(key)
-    if hit and time.time() - hit[0] < ttl:
-        return hit[1]
-    res = analyze_ticker_sentiment(key, limit=limit)
-    slim = {
-        "ticker": key,
-        "avg_score": res["avg_score"],
-        "label": res["label"],
-        "n_headlines": res["n_headlines"],
-        # Kept so the headline drill-down shows exactly what was scored.
-        "headlines": res.get("headlines", []),
-    }
-    _SENT_CACHE[key] = (time.time(), slim)
-    return slim
+    owner = False
+    while True:
+        now = time.time()
+        with _SENT_LOCK:
+            expired = [
+                cached_key
+                for cached_key, (saved_at, _value) in list(_SENT_CACHE.items())
+                if now - saved_at >= ttl
+            ]
+            for cached_key in expired:
+                _SENT_CACHE.pop(cached_key, None)
+            hit = _SENT_CACHE.get(key)
+            if hit:
+                if hasattr(_SENT_CACHE, "move_to_end"):
+                    _SENT_CACHE.move_to_end(key)
+                return hit[1]
+            event = _SENT_INFLIGHT.get(key)
+            if event is None:
+                event = threading.Event()
+                _SENT_INFLIGHT[key] = event
+                owner = True
+                break
+        # Another request is already paying for this ticker. Wait outside the
+        # lock so different tickers can still be fetched concurrently.
+        if event.wait(timeout=30):
+            continue
+        with _SENT_LOCK:
+            if _SENT_INFLIGHT.get(key) is event:
+                _SENT_INFLIGHT.pop(key, None)
+
+    try:
+        res = analyze_ticker_sentiment(key, limit=limit)
+        slim = {
+            "ticker": key,
+            "avg_score": res["avg_score"],
+            "label": res["label"],
+            "n_headlines": res["n_headlines"],
+            # Kept so the headline drill-down shows exactly what was scored.
+            "headlines": res.get("headlines", []),
+        }
+        with _SENT_LOCK:
+            _SENT_CACHE[key] = (time.time(), slim)
+            if hasattr(_SENT_CACHE, "move_to_end"):
+                _SENT_CACHE.move_to_end(key)
+            while len(_SENT_CACHE) > SENTIMENT_CACHE_MAX_ENTRIES:
+                if hasattr(_SENT_CACHE, "popitem"):
+                    try:
+                        _SENT_CACHE.popitem(last=False)
+                        continue
+                    except TypeError:
+                        pass
+                _SENT_CACHE.pop(next(iter(_SENT_CACHE)), None)
+        return slim
+    finally:
+        if owner:
+            with _SENT_LOCK:
+                completed = _SENT_INFLIGHT.pop(key, None)
+                if completed is not None:
+                    completed.set()
 
 
 def _extract_headlines(raw_news, limit: int) -> list[dict]:
@@ -217,11 +285,13 @@ def _strip_html(text: str) -> str:
 
 
 def fetch_news(ticker: str, limit: int = 10) -> list[dict]:
-    """Fetch recent news headlines for a ticker from Yahoo Finance."""
+    """Fetch recent news headlines for a ticker from the configured provider."""
+    from api import market_data
+
     try:
-        raw = yf.Ticker(ticker).news
+        raw = market_data.get_provider().news(ticker, limit=limit)
     except Exception as e:
-        raise RuntimeError(f"Failed to fetch news for {ticker}: {e}") from e
+        raise RuntimeError(f"Headline data is unavailable for {ticker}.") from e
     return _extract_headlines(raw, limit)
 
 
@@ -247,17 +317,25 @@ def analyze_ticker_sentiment(ticker: str, limit: int = 10) -> dict:
             "n_headlines": 0,
             "avg_score": 0.0,
             "label": "No data",
-            "counts": {"Bullish": 0, "Neutral": 0, "Bearish": 0},
+            "counts": {
+                "Positive language": 0,
+                "Neutral language": 0,
+                "Negative language": 0,
+            },
             "headlines": [],
             "backend": _BACKEND,
         }
 
     avg = sum(x["score"] for x in scored) / len(scored)
-    counts = {"Bullish": 0, "Neutral": 0, "Bearish": 0}
+    counts = {
+        "Positive language": 0,
+        "Neutral language": 0,
+        "Negative language": 0,
+    }
     for x in scored:
         counts[x["label"]] += 1
 
-    scored.sort(key=lambda x: x["score"])  # most bearish first
+    scored.sort(key=lambda x: x["score"])  # most negative language first
     return {
         "ticker": ticker,
         "n_headlines": len(scored),
@@ -311,8 +389,8 @@ def analyze_portfolio_sentiment(weights: dict, limit_per_ticker: int = 6) -> dic
         "portfolio_sentiment_score": overall,
         "portfolio_label": label_from_score(overall),
         "coverage": f"{round(100 * used_w / total_w, 1)}% of weight" if total_w else "0%",
-        "most_bearish": ranked[:3],
-        "most_bullish": list(reversed(ranked[-3:])),
+        "most_negative_language": ranked[:3],
+        "most_positive_language": list(reversed(ranked[-3:])),
         "per_ticker": per_ticker,
         "backend": _BACKEND,
     }
@@ -320,38 +398,51 @@ def analyze_portfolio_sentiment(weights: dict, limit_per_ticker: int = 6) -> dic
 
 def apply_sentiment_tilt(weights: dict, strength: float = 0.2, limit_per_ticker: int = 5) -> dict:
     """
-    Tilt allocation weights by current news sentiment.
+    Return normalized input weights plus descriptive headline tone.
 
-    Each weight is scaled by (1 + strength * score) where score is the
-    ticker's average headline sentiment in [-1, 1], then the weights are
-    renormalized. strength=0.2 means a fully bullish name gains at most +20%
-    relative weight and a fully bearish one loses at most -20%.
-
-    Returns {"weights": tilted, "sentiment": {ticker: score}, "strength": s}.
+    Headline sentiment is too noisy and weakly validated to alter a user's
+    allocation. ``strength`` is retained for backwards-compatible callers but
+    is never applied; the effective strength is always zero.
     """
     if not weights:
         raise ValueError("weights is empty.")
-    strength = max(0.0, min(float(strength), 1.0))
 
     scores = {}
-    tilted = {}
+    neutral = {}
     for t, w in weights.items():
         w = float(w)
+        if not math.isfinite(w):
+            raise ValueError("weights must be finite.")
         if w <= 0:
             continue
+        neutral[str(t).upper()] = neutral.get(str(t).upper(), 0.0) + w
         try:
             res = analyze_ticker_sentiment(t, limit=limit_per_ticker)
-            score = res["avg_score"] if res["n_headlines"] > 0 else 0.0
+            score = (
+                res["avg_score"]
+                if res["n_headlines"] >= MIN_HEADLINES_FOR_TONE
+                else 0.0
+            )
         except Exception:
             score = 0.0
-        scores[t.upper()] = score
-        tilted[t] = max(w * (1.0 + strength * score), 0.0)
+        scores[str(t).upper()] = score
 
-    total = sum(tilted.values())
-    if total > 0:
-        tilted = {t: round(v / total, 6) for t, v in tilted.items()}
+    total = sum(neutral.values())
+    if total <= 0:
+        raise ValueError("weights has no positive entries.")
+    neutral = {ticker: round(value / total, 6) for ticker, value in neutral.items()}
 
-    return {"weights": tilted, "sentiment": scores, "strength": strength, "backend": _BACKEND}
+    return {
+        "weights": neutral,
+        "sentiment": scores,
+        "strength": 0.0,
+        "requested_strength": max(0.0, min(float(strength), 1.0)),
+        "disabled": True,
+        "backend": _BACKEND,
+        "disclaimer": (
+            "Headline tone is descriptive only and does not change allocation weights."
+        ),
+    }
 
 
 if __name__ == "__main__":

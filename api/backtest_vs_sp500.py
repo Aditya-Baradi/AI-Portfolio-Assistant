@@ -13,7 +13,6 @@ Flow
 
 Run:  venv/Scripts/python.exe -m api.backtest_vs_sp500
 """
-import json
 import warnings
 
 import numpy as np
@@ -35,8 +34,6 @@ from api.portfolio_core import (
     COST_BPS_DEFAULT,
 )
 
-warnings.filterwarnings("ignore")
-
 PORTFOLIO_JSON = "portfolio.json"
 BENCHMARK = "SPY"
 
@@ -47,6 +44,28 @@ TEST_START, TEST_END = "2025-01-01", "2026-07-09"
 
 def pct(x):
     return f"{x * 100:+.2f}%"
+
+
+def _hold_period_returns(asset_returns: pd.DataFrame, weights: dict):
+    """
+    Simulate buying target weights before the first return and holding without
+    rebalancing through the period.
+
+    Returns (daily portfolio returns, ending drifted weights).  The ending
+    weights are what the next rebalance must trade from.
+    """
+    columns = [t for t in weights if t in asset_returns.columns and weights[t] > 0]
+    if not columns:
+        raise ValueError("No target weights have usable period returns.")
+    w = pd.Series({t: float(weights[t]) for t in columns}, dtype=float)
+    w = w / w.sum()
+    growth = (1.0 + asset_returns[columns]).cumprod()
+    positions = growth.mul(w, axis=1)
+    curve = positions.sum(axis=1)
+    period_returns = curve.pct_change()
+    period_returns.iloc[0] = float(curve.iloc[0] - 1.0)
+    end_weights = (positions.iloc[-1] / float(curve.iloc[-1])).to_dict()
+    return period_returns, end_weights
 
 
 def show_backtest(title, bt):
@@ -87,7 +106,7 @@ def run_walk_forward(tickers, wf_start, wf_end, benchmark=BENCHMARK,
         raise ValueError("Walk-forward window too short for the rebalance frequency.")
 
     all_port, all_bench = [], []
-    prev_w = None
+    prev_end_w = None
     quarters = []
 
     for i, qs in enumerate(q_starts):
@@ -111,23 +130,29 @@ def run_walk_forward(tickers, wf_start, wf_end, benchmark=BENCHMARK,
         usable = [t for t in alloc if t in rets.columns]
         if not usable or benchmark not in rets.columns:
             continue
-        w = np.array([alloc[t] for t in usable])
+        w = np.array([alloc[t] for t in usable], dtype=float)
         w = w / w.sum()
-        port_q = rets[usable].dot(w)
-        bench_q = rets[benchmark]
+        w_map = {t: float(x) for t, x in zip(usable, w)}
+        port_q, end_w = _hold_period_returns(rets[usable], w_map)
+        bench_q = rets[benchmark].copy()
 
-        # Rebalance cost at the quarter boundary (full buy on the first one).
-        w_map = {t: x for t, x in zip(usable, w)}
+        # Rebalance from the PREVIOUS PERIOD'S DRIFTED ending weights, not from
+        # its old target.  For a fully invested portfolio, one-way dollars
+        # traded are half the L1 weight change.  The initial purchase is 100%.
         if len(port_q) > 0 and cost_bps > 0:
             turnover = (
-                sum(abs(w_map.get(t, 0.0) - prev_w.get(t, 0.0)) for t in set(w_map) | set(prev_w))
-                if prev_w is not None else 1.0
+                0.5 * sum(
+                    abs(w_map.get(t, 0.0) - prev_end_w.get(t, 0.0))
+                    for t in set(w_map) | set(prev_end_w)
+                )
+                if prev_end_w is not None else 1.0
             )
-            port_q.iloc[0] -= turnover * cost_bps / 10_000.0
-            if prev_w is None:
-                bench_q = bench_q.copy()
-                bench_q.iloc[0] -= cost_bps / 10_000.0
-        prev_w = w_map
+            cost_rate = turnover * cost_bps / 10_000.0
+            port_q.iloc[0] = (1.0 + port_q.iloc[0]) * (1.0 - cost_rate) - 1.0
+            if prev_end_w is None:
+                bench_cost = cost_bps / 10_000.0
+                bench_q.iloc[0] = (1.0 + bench_q.iloc[0]) * (1.0 - bench_cost) - 1.0
+        prev_end_w = end_w
 
         all_port.append(port_q)
         all_bench.append(bench_q)

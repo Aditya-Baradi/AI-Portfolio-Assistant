@@ -25,6 +25,10 @@ class TestPerfMetrics:
         assert m["max_drawdown"] == pytest.approx(-0.5)
         assert m["total_return"] == pytest.approx(0.0, abs=1e-12)
 
+    def test_first_day_loss_counts_from_initial_capital(self):
+        m = _perf_metrics(pd.Series([-0.5, 0.1]))
+        assert m["max_drawdown"] == pytest.approx(-0.5)
+
     def test_rf_reduces_sharpe(self):
         rets = pd.Series(np.random.default_rng(1).normal(0.001, 0.01, 252))
         s0 = _perf_metrics(rets, rf_annual=0.0)["Sharpe"]
@@ -101,6 +105,35 @@ class TestBacktestVsBenchmark:
     def test_empty_weights_raise(self):
         with pytest.raises(ValueError):
             backtest_vs_benchmark({}, "2024-01-01", "2025-01-01")
+
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), -0.1])
+    def test_invalid_weights_raise(self, bad):
+        with pytest.raises(ValueError, match="finite and non-negative"):
+            backtest_vs_benchmark(
+                {"AAA": bad}, "2024-01-01", "2025-01-01"
+            )
+
+    def test_buy_and_hold_does_not_reset_drift(self, patch_prices):
+        prices = make_prices(
+            {"AAA": [1.0, -0.5], "BBB": [0.0, 0.0], "SPY": [0.0, 0.0]},
+            n_days=2,
+        )
+        patch_prices(prices)
+        held = backtest_vs_benchmark(
+            {"AAA": 0.5, "BBB": 0.5},
+            "2024-01-01",
+            "2025-01-01",
+            cost_bps=0.0,
+            rebalance="none",
+        )
+        daily = backtest_vs_benchmark(
+            {"AAA": 0.5, "BBB": 0.5},
+            "2024-01-01",
+            "2025-01-01",
+            cost_bps=0.0,
+            rebalance="daily",
+        )
+        assert held["portfolio"]["total_return"] < daily["portfolio"]["total_return"]
 
 
 class TestComputePortfolioMetrics:

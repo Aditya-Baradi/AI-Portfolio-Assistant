@@ -1,4 +1,6 @@
 """Tests for the sentiment module (offline: scoring, labels, tilt, extraction)."""
+from collections import OrderedDict
+
 import pytest
 
 from api.sentiment import (
@@ -22,23 +24,40 @@ class TestScoring:
         assert score_text("") == 0.0
 
     def test_labels(self):
-        assert label_from_score(0.5) == "Bullish"
-        assert label_from_score(-0.5) == "Bearish"
-        assert label_from_score(0.0) == "Neutral"
-        assert label_from_score(0.15) == "Bullish"   # boundary inclusive
-        assert label_from_score(-0.15) == "Bearish"
+        assert label_from_score(0.5) == "Positive language"
+        assert label_from_score(-0.5) == "Negative language"
+        assert label_from_score(0.0) == "Neutral language"
+        assert label_from_score(0.15) == "Positive language"
+        assert label_from_score(-0.15) == "Negative language"
 
 
 class TestSignals:
-    def test_buy_hold_sell_thresholds(self):
-        assert signal_from_score(0.5, 3) == "Buy"
-        assert signal_from_score(0.15, 3) == "Buy"     # boundary inclusive
-        assert signal_from_score(0.0, 3) == "Hold"
-        assert signal_from_score(-0.15, 3) == "Sell"
-        assert signal_from_score(-0.5, 3) == "Sell"
+    def test_tone_band_thresholds(self):
+        assert signal_from_score(0.5, 3) == "Positive tone"
+        assert signal_from_score(0.15, 3) == "Positive tone"   # boundary inclusive
+        assert signal_from_score(0.0, 3) == "Mixed"
+        assert signal_from_score(-0.15, 3) == "Negative tone"
+        assert signal_from_score(-0.5, 3) == "Negative tone"
 
-    def test_no_news_is_hold(self):
-        assert signal_from_score(0.9, 0) == "Hold"
+    def test_no_news_is_no_data(self):
+        assert signal_from_score(0.9, 0) == "No data"
+
+    def test_thin_coverage_is_not_characterised(self):
+        """One or two headlines is noise, not a tone. It must not be labelled."""
+        assert signal_from_score(0.9, 1) == "No data"
+        assert signal_from_score(0.9, 2) == "No data"
+        assert signal_from_score(0.9, 3) == "Positive tone"
+
+    def test_never_emits_trade_instructions(self):
+        """
+        Guards the deliberate product decision that this function describes news
+        tone and never instructs a trade. If someone reintroduces Buy/Sell here,
+        this fails.
+        """
+        forbidden = {"buy", "sell", "hold", "strong buy", "outperform"}
+        for score in (-1.0, -0.2, -0.15, 0.0, 0.15, 0.2, 1.0):
+            for n in (0, 1, 3, 25):
+                assert signal_from_score(score, n).strip().lower() not in forbidden
 
 
 class TestSentimentCache:
@@ -52,7 +71,7 @@ class TestSentimentCache:
             return {"avg_score": 0.3, "label": "Bullish", "n_headlines": 4}
 
         monkeypatch.setattr(s, "analyze_ticker_sentiment", fake_analyze)
-        monkeypatch.setattr(s, "_SENT_CACHE", {})
+        monkeypatch.setattr(s, "_SENT_CACHE", OrderedDict())
         first = cached_ticker_sentiment("aaa")
         second = cached_ticker_sentiment("AAA")
         assert calls["n"] == 1  # second call served from cache
@@ -70,7 +89,7 @@ class TestSentimentCache:
             return {"avg_score": 0.1, "label": "Neutral", "n_headlines": 2}
 
         monkeypatch.setattr(s, "analyze_ticker_sentiment", fake_analyze)
-        monkeypatch.setattr(s, "_SENT_CACHE", {})
+        monkeypatch.setattr(s, "_SENT_CACHE", OrderedDict())
         cached_ticker_sentiment("BBB", ttl=0)
         cached_ticker_sentiment("BBB", ttl=0)
         assert calls["n"] == 2
@@ -106,7 +125,7 @@ class TestHeadlineExtraction:
 
 
 class TestSentimentTilt:
-    def test_tilt_overweights_bullish(self, monkeypatch):
+    def test_tone_never_changes_weights(self, monkeypatch):
         import api.sentiment as s
 
         fake = {"AAA": 1.0, "BBB": -1.0}
@@ -117,8 +136,10 @@ class TestSentimentTilt:
         monkeypatch.setattr(s, "analyze_ticker_sentiment", fake_analyze)
         out = apply_sentiment_tilt({"AAA": 0.5, "BBB": 0.5}, strength=0.2)
         w = out["weights"]
-        assert w["AAA"] > 0.5 > w["BBB"]
+        assert w == {"AAA": 0.5, "BBB": 0.5}
         assert sum(w.values()) == pytest.approx(1.0)
+        assert out["disabled"] is True
+        assert out["strength"] == 0.0
 
     def test_zero_strength_is_identity(self, monkeypatch):
         import api.sentiment as s

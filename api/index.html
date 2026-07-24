@@ -26,7 +26,7 @@
       --user-bg:    #ecf1ec;   /* soft green tint for user bubbles */
       --user-line:  #d3ddd4;
       --danger:     #8c3b2e;
-      --up:         #177a53;   /* gains, buy signals, "good" chart lines */
+      --up:         #177a53;   /* positive historical values and chart lines */
       --neutral:    #8a8378;   /* benchmark chart lines */
       --up-band:    rgba(23, 122, 83, 0.10);
       --down-band:  rgba(140, 59, 46, 0.10);
@@ -521,7 +521,7 @@
     .act-row .k { font-weight: 600; }
     .act-row .t { color: var(--muted); font-size: 0.68rem; }
 
-    /* ---------- Mix view, headlines, trades, stars ---------- */
+    /* ---------- Mix view, headlines, stars ---------- */
     .mix-row { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; font-size: 0.74rem; }
     .risk-note.sm { padding: 8px 11px; font-size: 0.72rem; }
     .mix-name { min-width: 88px; font-weight: 600; }
@@ -537,19 +537,6 @@
     .headline .h-s.up { color: var(--up); }
     .headline .h-s.down { color: var(--danger); }
     .holding-row { cursor: pointer; }
-    .trade-row {
-      display: flex;
-      gap: 10px;
-      align-items: baseline;
-      padding: 6px 12px;
-      font-size: 0.8rem;
-      border-bottom: 1px solid var(--line);
-      font-variant-numeric: tabular-nums;
-    }
-    .trade-row:last-child { border-bottom: none; }
-    .trade-act { font-weight: 700; min-width: 40px; font-size: 0.7rem; letter-spacing: 0.05em; }
-    .trade-act.buy { color: var(--up); }
-    .trade-act.sell { color: var(--danger); }
     .h-star {
       border: none;
       background: none;
@@ -819,7 +806,13 @@
       text-align: center;
       margin: 0;
       flex: none;
+      line-height: 1.5;
     }
+    .disclaimer b { color: var(--text); }
+    .disclaimer a { color: inherit; text-decoration: underline; }
+    .disclaimer a:hover { color: var(--text); }
+    .legal-links { margin-top: 4px; display: block; }
+    .legal-links a { margin: 0 6px; }
 
     /* ---------- Portfolio panel ---------- */
     .panel {
@@ -937,18 +930,20 @@
     .h-score.up { color: var(--up); }
     .h-score.down { color: var(--danger); }
     .h-score.flat { color: var(--muted); font-weight: 400; }
-    .h-sig {
-      font-size: 0.64rem;
-      font-weight: 700;
-      letter-spacing: 0.05em;
+    /* News-tone chip. Deliberately low-contrast and sentence-case: it describes
+       press coverage, not a call to action. */
+    .h-tone {
+      font-size: 0.62rem;
+      font-weight: 550;
       border-radius: 5px;
-      padding: 2px 0;
-      min-width: 44px;
+      padding: 2px 6px;
+      min-width: 78px;
       text-align: center;
+      white-space: nowrap;
     }
-    .h-sig.buy { background: rgba(23, 122, 83, 0.12); color: var(--up); }
-    .h-sig.sell { background: rgba(140, 59, 46, 0.12); color: var(--danger); }
-    .h-sig.hold { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+    .h-tone.pos { background: rgba(23, 122, 83, 0.10); color: var(--up); }
+    .h-tone.neg { background: rgba(140, 59, 46, 0.10); color: var(--danger); }
+    .h-tone.neu { background: transparent; color: var(--muted); border: 1px solid var(--line); }
     .holdings-loading {
       padding: 14px 12px;
       font-size: 0.76rem;
@@ -993,6 +988,14 @@
       line-height: 1.45;
       border-top: 1px solid var(--line);
       padding-top: 10px;
+    }
+    /* Model-limitation callout. Distinct from a plain note because it states
+       what a number is NOT — the user has to be able to find it. */
+    .assumption-note {
+      border-top: none;
+      border-left: 3px solid var(--line);
+      padding: 8px 0 2px 10px;
+      margin-top: 8px;
     }
 
     @media (max-width: 1000px) {
@@ -1039,6 +1042,16 @@
       <div class="field" id="twofaField" style="display:none">
         <label for="twofaCode">Six-digit code from your authenticator app</label>
         <input id="twofaCode" type="text" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="one-time-code" />
+      </div>
+      <div class="field" id="termsField" style="display:none">
+        <label style="display:flex;align-items:flex-start;gap:8px;font-weight:400;line-height:1.45">
+          <input id="termsAccept" type="checkbox" style="width:auto;margin-top:3px" />
+          <span>I am at least 18 and agree to the
+            <a href="/terms" target="_blank" rel="noopener">Terms of Service</a>
+            and acknowledge the
+            <a href="/privacy" target="_blank" rel="noopener">Privacy Policy</a>.
+          </span>
+        </label>
       </div>
       <div class="auth-error" id="authError"></div>
       <div class="auth-ok" id="authMsg" style="display:none"></div>
@@ -1153,7 +1166,7 @@
         <input id="stockSearch" placeholder="Type any ticker, e.g. AMD" maxlength="10" autocomplete="off" />
         <button class="btn-primary" id="stockSearchBtn" type="button">Look up</button>
         <span class="stocks-err" id="stockSearchErr"></span>
-        <span class="stocks-hint">Estimated price ranges for the next 12 months, based on the last 3 years. Estimates, not guarantees.</span>
+        <span class="stocks-hint">Illustrative total-return series paths based on the last 3 years—not quoted-price forecasts.</span>
       </div>
       <div class="stocks-scroll">
         <div class="stocks-grid" id="stocksGrid"></div>
@@ -1170,23 +1183,16 @@
             <input id="planYears" type="number" min="1" max="60" value="30" />
           </div>
           <div class="plan-field">
-            <label for="planRisk">Risk comfort <span class="plan-val" id="planRiskVal">5 / 10</span></label>
+            <label for="planRisk">Illustrative risk setting
+              <span class="plan-val" id="planRiskVal">5 / 10</span></label>
             <input id="planRisk" type="range" min="1" max="10" value="5" />
-            <div class="plan-scale"><span>Play it safe</span><span>Go for it</span></div>
+            <div class="plan-scale"><span>Lower modeled swings</span><span>Higher modeled swings</span></div>
           </div>
           <div class="plan-field">
-            <label for="planVol">Biggest yearly swings you can stomach
+            <label for="planVol">Volatility cap for this scenario
               <span class="plan-val" id="planVolVal">25%</span></label>
             <input id="planVol" type="range" min="5" max="60" value="25" />
             <div class="plan-scale"><span>5%</span><span>60%</span></div>
-          </div>
-          <div class="plan-field">
-            <label for="planGoal">What matters most</label>
-            <select id="planGoal">
-              <option value="growth">Growth: make the money grow fastest</option>
-              <option value="balanced" selected>Balanced: good growth for the risk</option>
-              <option value="income">Steady: sleep well, fewer surprises</option>
-            </select>
           </div>
           <div class="plan-field">
             <label for="planMonthly">Money added per month ($)</label>
@@ -1200,13 +1206,24 @@
           <div class="plan-msg" id="planMsg"></div>
         </div>
         <div class="plan-results" id="planResults">
-          <div class="stocks-empty">Fill in your plan on the left and save it. You'll get a
-            retirement outlook and a list of stocks that match how you invest.</div>
+          <div class="stocks-empty">Fill in your assumptions on the left and save them.
+            You&apos;ll get an illustrative retirement simulation, not a financial plan
+            or a prediction.</div>
         </div>
       </div>
     </div>
 
-    <p class="disclaimer">For learning only. Not investment advice.</p>
+    <p class="disclaimer">
+      <b>Educational tool — not investment advice.</b>
+      Evergreen is not a registered investment adviser. Nothing here is a
+      recommendation to buy, sell or hold any security. Model output and
+      backtests are hypothetical, use historical data, and do not predict future
+      results. Market data may be delayed or inaccurate, and the AI assistant can
+      be wrong. Verify anything that matters before acting on it.
+      <span class="legal-links">
+        <a href="/terms" target="_blank" rel="noopener">Terms</a>·<a href="/privacy" target="_blank" rel="noopener">Privacy</a>·<a href="#" id="disclosuresLink">Risk disclosures</a>
+      </span>
+    </p>
   </div>
 
 <script nonce="__CSP_NONCE__">
@@ -1214,9 +1231,10 @@
   const API_BASE = location.origin.startsWith("http") ? location.origin : "http://127.0.0.1:8000";
 
   // ---------------- auth state ----------------
-  let token = localStorage.getItem("authToken") || "";
-  let userEmail = localStorage.getItem("authEmail") || "";
-  let userName = localStorage.getItem("authName") || "";
+  // Authentication lives in a Secure, HttpOnly cookie. JavaScript deliberately
+  // never reads or persists the bearer token.
+  let userEmail = "";
+  let userName = "";
   let currentChatId = null;
   let authMode = "login";
 
@@ -1241,13 +1259,139 @@
   const holdingsBox = document.getElementById("holdingsBox");
 
   function authHeaders(extra) {
-    return Object.assign({ "Authorization": "Bearer " + token }, extra || {});
+    return Object.assign({}, extra || {});
+  }
+
+  let sessionRefreshInFlight = null;
+  async function refreshSessionCookie() {
+    if (!sessionRefreshInFlight) {
+      sessionRefreshInFlight = fetch(API_BASE + "/auth/refresh", {
+        method: "POST",
+        credentials: "same-origin",
+      }).finally(() => { sessionRefreshInFlight = null; });
+    }
+    return sessionRefreshInFlight;
   }
 
   async function api(path, opts) {
-    const res = await fetch(API_BASE + path, opts);
+    const options = Object.assign({ credentials: "same-origin" }, opts || {});
+    const res = await fetch(API_BASE + path, options);
     if (res.status === 401) { signOutLocal(); throw new Error("Signed out."); }
+    if (
+      path !== "/auth/refresh"
+      && res.ok
+      && res.headers.get("X-Session-Refresh") === "required"
+    ) {
+      // Rotate only after the original request has completed. The server makes
+      // this idempotent across a short overlap, so two tabs cannot invalidate
+      // one another or manufacture multiple long-lived successors.
+      try { await refreshSessionCookie(); } catch { /* current response remains valid */ }
+    }
+    // Most of the app now requires a confirmed email address. Surface that as a
+    // single prompt with a resend button rather than letting every panel render
+    // its own generic "couldn't load" message.
+    if (res.status === 403) {
+      const copy = res.clone();
+      try {
+        const body = await copy.json();
+        const detail = body && body.detail;
+        if (detail && detail.code === "email_unverified") {
+          showVerifyGate(detail.message);
+        } else if (detail && detail.code === "policy_acceptance_required") {
+          showPolicyGate(detail.version, detail.message);
+        }
+      } catch { /* not the verification gate; let the caller handle it */ }
+    }
     return res;
+  }
+
+  let verifyGateShown = false;
+  function showVerifyGate(message) {
+    if (verifyGateShown) return;   // one prompt, even if six panels 403 at once
+    verifyGateShown = true;
+    showModal(`
+      <div class="modal-title">Confirm your email</div>
+      <p>${escapeHtml(message || "Please confirm your email address to continue.")}</p>
+      <p class="panel-note" style="border:none;padding:0">
+        We sent a link to <b>${escapeHtml(userEmail)}</b>. Click it, then reload
+        this page.
+      </p>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button type="button" class="mini-tab active" id="gateResend">Resend link</button>
+        <button type="button" class="modal-close mini-tab">Close</button>
+      </div>
+      <div id="gateMsg" class="panel-note" style="border:none;padding-top:8px"></div>`);
+    document.getElementById("gateResend").addEventListener("click", async () => {
+      const msg = document.getElementById("gateMsg");
+      msg.textContent = "Sending…";
+      try {
+        const r = await fetch(API_BASE + "/auth/verify/resend",
+                              { method: "POST", headers: authHeaders() });
+        msg.textContent = r.ok ? "Sent — check your inbox."
+                               : "Couldn't send right now. Try again shortly.";
+      } catch { msg.textContent = "Couldn't reach the server."; }
+    });
+    document.getElementById("modalBack").addEventListener("click", (e) => {
+      if (e.target.id === "modalBack" || e.target.closest(".modal-close")) {
+        verifyGateShown = false;
+      }
+    });
+  }
+
+  let policyGateShown = false;
+  function showPolicyGate(version, message) {
+    if (policyGateShown) return;
+    policyGateShown = true;
+    showModal(`
+      <div class="modal-title">Updated Terms and Privacy Policy</div>
+      <p>${escapeHtml(message || "Please review and accept the current policies to continue.")}</p>
+      <p><a href="/terms" target="_blank" rel="noopener">Read the Terms</a> ·
+         <a href="/privacy" target="_blank" rel="noopener">Read the Privacy Policy</a></p>
+      <label style="display:flex;align-items:flex-start;gap:8px;line-height:1.45">
+        <input id="policyAcceptCheck" type="checkbox" style="width:auto;margin-top:3px">
+        <span>I am at least 18, agree to the Terms, and acknowledge the Privacy Policy.</span>
+      </label>
+      <div class="modal-err" id="policyAcceptError"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn-primary" id="policyAcceptGo">Accept and continue</button>
+        <button type="button" class="btn-quiet" id="policySignOut">Sign out</button>
+      </div>`);
+    document.getElementById("policyAcceptGo").addEventListener("click", async () => {
+      const err = document.getElementById("policyAcceptError");
+      if (!document.getElementById("policyAcceptCheck").checked) {
+        err.textContent = "Please check the box after reviewing both documents.";
+        return;
+      }
+      try {
+        const res = await fetch(API_BASE + "/legal/accept", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ version, accept_terms: true }),
+        });
+        const d = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          err.textContent = d.detail || "Could not record acceptance.";
+          return;
+        }
+        policyGateShown = false;
+        closeModal();
+        location.reload();
+      } catch {
+        err.textContent = "Could not reach the server.";
+      }
+    });
+    document.getElementById("policySignOut").addEventListener("click", async () => {
+      try {
+        await fetch(API_BASE + "/auth/logout", {
+          method: "POST",
+          credentials: "same-origin",
+        });
+      } catch {}
+      policyGateShown = false;
+      closeModal();
+      signOutLocal();
+    });
   }
 
   function setAuthMode(mode) {
@@ -1257,6 +1401,7 @@
     authSubmit.textContent = mode === "login" ? "Sign in" : "Create account";
     authPassword.autocomplete = mode === "login" ? "current-password" : "new-password";
     document.getElementById("nameField").style.display = mode === "register" ? "" : "none";
+    document.getElementById("termsField").style.display = mode === "register" ? "" : "none";
     authError.textContent = "";
   }
   tabLogin.addEventListener("click", () => setAuthMode("login"));
@@ -1287,7 +1432,21 @@
         }
       } else {
         const payload = { email: authEmail.value, password: authPassword.value };
-        if (authMode === "register") payload.name = document.getElementById("authName").value;
+        if (authMode === "register") {
+          if (!document.getElementById("termsAccept").checked) {
+            authError.textContent = "You must accept the Terms and acknowledge the Privacy Policy.";
+            return;
+          }
+          payload.name = document.getElementById("authName").value;
+          payload.accept_terms = true;
+          const policyRes = await fetch(API_BASE + "/legal/version");
+          const policy = await policyRes.json().catch(() => ({}));
+          if (!policyRes.ok || !policy.version) {
+            authError.textContent = "Could not load the current legal terms. Please try again.";
+            return;
+          }
+          payload.policy_version = policy.version;
+        }
         res = await fetch(API_BASE + "/auth/" + (authMode === "login" ? "login" : "register"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1308,10 +1467,8 @@
       }
       pending2FA = "";
       document.getElementById("twofaField").style.display = "none";
-      token = data.token; userEmail = data.email; userName = data.name || "";
-      localStorage.setItem("authToken", token);
-      localStorage.setItem("authEmail", userEmail);
-      localStorage.setItem("authName", userName);
+      userEmail = data.email;
+      userName = data.name || "";
       enterApp();
     } catch (e) {
       authError.textContent = "Cannot reach the backend on " + API_BASE + ". Is it running?";
@@ -1410,11 +1567,15 @@
     } catch { t.textContent = "Couldn't send right now. Try again shortly."; }
   });
 
+  let sessionAgeCheckTimer = null;
+
   function signOutLocal() {
-    token = ""; userEmail = ""; userName = "";
-    localStorage.removeItem("authToken");
-    localStorage.removeItem("authEmail");
-    localStorage.removeItem("authName");
+    userEmail = "";
+    userName = "";
+    if (sessionAgeCheckTimer !== null) {
+      clearInterval(sessionAgeCheckTimer);
+      sessionAgeCheckTimer = null;
+    }
     appView.classList.remove("active");
     authView.classList.remove("hidden");
     authPassword.value = "";
@@ -1428,6 +1589,17 @@
   async function enterApp() {
     authView.classList.add("hidden");
     appView.classList.add("active");
+    if (sessionAgeCheckTimer === null) {
+      // Long-lived tabs otherwise might never cross a route that emits the
+      // rotation hint. An hourly lightweight identity check gives the server a
+      // safe opportunity to rotate the HttpOnly cookie after its 12-hour age
+      // threshold without exposing credential material to this script.
+      sessionAgeCheckTimer = setInterval(() => {
+        if (appView.classList.contains("active")) {
+          api("/me", { headers: authHeaders() }).catch(() => {});
+        }
+      }, 60 * 60 * 1000);
+    }
     document.getElementById("accountEmail").textContent = userName || userEmail;
     refreshVerifyBanner();
     loadProjection();
@@ -1435,7 +1607,7 @@
     loadAlerts();
     const chats = await loadChats();
     // Restore the chat that was open before a reload, if it still exists.
-    const saved = localStorage.getItem("chat:" + userEmail);
+    const saved = sessionStorage.getItem("lastChat");
     if (saved && chats.some((c) => c.id === saved)) {
       await openChat(saved);
     } else {
@@ -1449,7 +1621,7 @@
       "c-" + Date.now() + "-" + Math.random().toString(36).slice(2, 10);
     chatWindow.innerHTML = "";
     highlightChat(null);
-    if (userEmail) localStorage.removeItem("chat:" + userEmail);
+    sessionStorage.removeItem("lastChat");
   }
 
   function highlightChat(id) {
@@ -1488,7 +1660,7 @@
       if (!res.ok) return;
       const data = await res.json();
       currentChatId = id;
-      localStorage.setItem("chat:" + userEmail, id);
+      sessionStorage.setItem("lastChat", id);
       chatWindow.innerHTML = "";
       for (const m of data.messages) addMessage(m.role, m.content);
       highlightChat(id);
@@ -1588,26 +1760,10 @@
     div.className = "msg " + role;
     text = String(text);
 
-    // Pull out generated chart paths; shown as images, not as raw text lines.
-    const chartPaths = text.match(/\/charts\/[\w.-]+\.png/g);
-    const cleaned = chartPaths
-      ? text.split(/\r?\n/).filter((l) => !/^\s*\/charts\/[\w.-]+\.png\s*$/.test(l)).join("\n")
-      : text;
-
     if (role === "assistant") {
-      div.innerHTML = renderMarkdown(cleaned);
+      div.innerHTML = renderMarkdown(text);
     } else {
-      div.textContent = cleaned;
-    }
-
-    if (chartPaths) {
-      for (const p of chartPaths) {
-        const img = document.createElement("img");
-        img.src = API_BASE + p;
-        img.alt = "chart";
-        img.style.cssText = "display:block;max-width:100%;border-radius:8px;border:1px solid var(--line);margin-top:10px;background:#fff;";
-        div.appendChild(img);
-      }
+      div.textContent = text;
     }
 
     chatWindow.appendChild(div);
@@ -1616,7 +1772,7 @@
 
   async function sendMessage() {
     const text = messageInput.value.trim();
-    if (!text || !token) return;
+    if (!text) return;
     const isFirst = chatWindow.children.length === 0;
 
     messageInput.value = "";
@@ -1642,7 +1798,7 @@
       try { data = JSON.parse(raw); }
       catch { addMessage("assistant", `Backend returned non-JSON:\n\n${raw.slice(0, 2000)}`); return; }
       addMessage("assistant", data.answer ?? "[empty response]");
-      localStorage.setItem("chat:" + userEmail, currentChatId);
+      sessionStorage.setItem("lastChat", currentChatId);
       if (isFirst) loadChats(); // the chat now exists server-side with a title
     } catch (err) {
       addMessage("assistant", `Request failed: ${err?.message || err}`);
@@ -1709,7 +1865,7 @@
   function projChartSVG(d, fmt = money, xlabels = ["Now", "+6 mo", "+1 yr"]) {
     const W = 288, H = 168, L = 8, R = 64, T = 10, B = 22;
     const iw = W - L - R, ih = H - T - B;
-    // Green when the most-likely path points up, red when it points down.
+    // Colour the model's median path by direction; it is not a forecast.
     const down = d.median[d.median.length - 1] < d.median[0];
     const lineCol = down ? "var(--danger)" : "var(--up)";
     const bandCol = down ? "var(--down-band)" : "var(--up-band)";
@@ -1738,7 +1894,7 @@
     const lblX = (X(last) + 5).toFixed(1);
     return `
       <svg class="proj-chart" viewBox="0 0 ${W} ${H}" role="img"
-           aria-label="Projected portfolio value over 12 months with optimistic and pessimistic bands">
+           aria-label="Illustrative model paths with upper and lower percentile bands">
         ${grid}
         <path d="M${band} Z" style="fill:${bandCol}" stroke="none"/>
         <polyline points="${pts(d.median)}" fill="none" style="stroke:${lineCol}" stroke-width="2"
@@ -1763,19 +1919,20 @@
     projBox.innerHTML = `
       <div class="tiles">
         <div class="tile"><div class="k">Value now</div><div class="v">${money(d.current_value)}</div></div>
-        <div class="tile"><div class="k">Est. gain / year</div><div class="v ${retCls}">${retPct >= 0 ? "+" : ""}${retPct.toFixed(1)}%</div></div>
-        <div class="tile" title="How much your portfolio's value tends to swing up and down in a year"><div class="k">Volatility</div><div class="v">${(s.volatility * 100).toFixed(1)}%</div></div>
-        <div class="tile" title="Return earned per unit of risk taken. Above 1 is good."><div class="k">Sharpe ratio</div><div class="v">${s.sharpe.toFixed(2)}</div></div>
+        <div class="tile"><div class="k">Historical CAGR input</div><div class="v ${retCls}">${retPct >= 0 ? "+" : ""}${retPct.toFixed(1)}%</div></div>
+        <div class="tile" title="Annualized swings measured over the historical input window"><div class="k">Historical volatility</div><div class="v">${(s.volatility * 100).toFixed(1)}%</div></div>
+        <div class="tile" title="Historical excess return divided by historical volatility"><div class="k">Historical Sharpe</div><div class="v">${s.sharpe.toFixed(2)}</div></div>
       </div>
       <div class="chart-head" style="margin-top:12px">
-        <span class="chart-title">Next 12 months</span>
-        <span class="chart-sub">likely range</span>
+        <span class="chart-title">12-month model illustration</span>
+        <span class="chart-sub">not a forecast or confidence interval</span>
       </div>
       ${projChartSVG(d)}
       <div class="panel-note">
-        Based on ${s.history_years} years of price history for your ${s.n_holdings} stocks.
-        The line is the middle path and the shaded area is the likely range.
-        Real results can land outside it.
+        Uses ${s.history_years} years of total-return history for your
+        ${s.n_holdings} holdings as model inputs. The line is a mechanical
+        central path; the shaded band is a model-standard-deviation range, not
+        odds, a target, or a best/worst case. ${escapeHtml(d.disclaimer || "")}
       </div>`;
   }
 
@@ -1833,7 +1990,7 @@
         const d = await res.json().catch(() => ({}));
         projBox.innerHTML = `<div class="panel-empty">${isStaleBackend(res, d)
           ? STALE_BACKEND_MSG
-          : (d.detail || "Import a portfolio to see your mix.")}</div>`;
+          : escapeHtml(d.detail || "Import a portfolio to see your mix.")}</div>`;
         return;
       }
       mixData = await res.json();
@@ -1845,14 +2002,17 @@
 
   function drawMix() {
     const d = mixData;
-    const bar = (name, w) => `
-      <div class="mix-row">
-        <span class="mix-name">${name}</span>
-        <span class="mix-bar-wrap"><span class="mix-bar" style="width:${Math.min(w * 100, 100).toFixed(1)}%"></span></span>
-        <span class="mix-pct">${(w * 100).toFixed(0)}%</span>
-      </div>`;
+    const bar = (name, rawWeight) => {
+      const w = Math.max(0, Math.min(Number(rawWeight) || 0, 1));
+      return `
+        <div class="mix-row">
+          <span class="mix-name">${escapeHtml(name)}</span>
+          <span class="mix-bar-wrap"><span class="mix-bar" style="width:${(w * 100).toFixed(1)}%"></span></span>
+          <span class="mix-pct">${(w * 100).toFixed(0)}%</span>
+        </div>`;
+    };
     const warn = (d.warnings || []).map((w) =>
-      `<div class="risk-note warn sm" style="margin-bottom:8px"><b>Heads up:</b> ${w}</div>`).join("");
+      `<div class="risk-note warn sm" style="margin-bottom:8px"><b>Heads up:</b> ${escapeHtml(w)}</div>`).join("");
     const moreStocks = d.stocks.length > 5 ? `<div class="chart-sub" style="margin-bottom:4px">+ ${d.stocks.length - 5} smaller positions</div>` : "";
     projBox.innerHTML = `
       ${warn}
@@ -1862,7 +2022,8 @@
       <div class="chart-head" style="margin:8px 0 7px"><span class="chart-title">By sector</span></div>
       ${d.sectors.slice(0, 4).map((s) => bar(s.sector, s.weight)).join("")}
       <div class="panel-note" style="margin-top:8px">
-        Rules of thumb: keep any one stock under 25% and any one sector under 40%.
+        Evergreen flags stock concentrations above 25% and sector concentrations
+        above 40% as educational heuristics. They are not personalized allocation limits.
       </div>`;
   }
 
@@ -1873,7 +2034,7 @@
       const res = await api("/portfolio/whatif", { headers: authHeaders() });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
-        projBox.innerHTML = `<div class="panel-empty">${d.detail || "Comparison unavailable right now."}</div>`;
+        projBox.innerHTML = `<div class="panel-empty">${escapeHtml(d.detail || "Comparison unavailable right now.")}</div>`;
         return;
       }
       whatifData = await res.json();
@@ -1888,7 +2049,7 @@
     const series = [
       { vals: d.curves.benchmark, color: "var(--neutral)", w: 1.4 },
       { vals: d.curves.current, color: "var(--ink)", w: 1.6 },
-      { vals: d.curves.optimized, color: "var(--up)", w: 2 },
+      { vals: d.curves.comparator, color: "var(--up)", w: 2 },
     ];
     const all = series.flatMap((s) => s.vals);
     const lo = Math.min(...all), hi = Math.max(...all);
@@ -1903,7 +2064,7 @@
     }).join("");
     return `
       <svg class="proj-chart" viewBox="0 0 ${W} ${H}" role="img"
-           aria-label="Growth of $1: your mix vs the suggested mix vs the S&amp;P 500">
+           aria-label="Growth of $1: your mix vs an equal-weight comparison vs the S&amp;P 500">
         <line x1="${L}" y1="${Y(1).toFixed(1)}" x2="${W - R}" y2="${Y(1).toFixed(1)}"
               style="stroke:var(--line-strong)" stroke-width="1" stroke-dasharray="3 3"/>
         ${lines}
@@ -1916,12 +2077,10 @@
     const d = whatifData;
     const pct = (x) => `${x >= 0 ? "+" : ""}${(x * 100).toFixed(1)}%`;
     const cls = (x) => (x >= 0 ? "pos" : "neg");
-    const topW = Object.entries(d.optimized_weights).slice(0, 4)
-      .map(([t, w]) => `${escapeHtml(t)} ${(w * 100).toFixed(0)}%`).join(", ");
     projBox.innerHTML = `
       <div class="tiles" style="grid-template-columns:repeat(3,1fr)">
-        <div class="tile"><div class="k">You</div><div class="v ${cls(d.returns.current)}">${pct(d.returns.current)}</div></div>
-        <div class="tile"><div class="k">Suggested</div><div class="v ${cls(d.returns.optimized)}">${pct(d.returns.optimized)}</div></div>
+        <div class="tile"><div class="k">Current mix</div><div class="v ${cls(d.returns.current)}">${pct(d.returns.current)}</div></div>
+        <div class="tile"><div class="k">Equal-weight comparison</div><div class="v ${cls(d.returns.comparator)}">${pct(d.returns.comparator)}</div></div>
         <div class="tile"><div class="k">S&amp;P 500</div><div class="v ${cls(d.returns.benchmark)}">${pct(d.returns.benchmark)}</div></div>
       </div>
       <div class="chart-head" style="margin-top:12px">
@@ -1931,43 +2090,12 @@
       ${whatIfChartSVG(d)}
       <div class="legend">
         <span><span class="dot" style="background:var(--ink)"></span>Your mix</span>
-        <span><span class="dot" style="background:var(--up)"></span>Suggested mix</span>
+        <span><span class="dot" style="background:var(--up)"></span>Equal-weight comparison</span>
         <span><span class="dot" style="background:var(--neutral)"></span>S&amp;P 500</span>
       </div>
       <div class="panel-note">
-        The suggested mix spreads your money more evenly across the same stocks
-        (biggest pieces: ${topW}). It was built with older data, then both mixes
-        were measured on the past year, which it never saw. Past results don't
-        guarantee future ones.
-      </div>
-      <div id="rebalanceBox"></div>`;
-    loadRebalance();
-  }
-
-  async function loadRebalance() {
-    const box = document.getElementById("rebalanceBox");
-    if (!box) return;
-    try {
-      const res = await api("/portfolio/rebalance", { headers: authHeaders() });
-      if (!res.ok) return;
-      const d = await res.json();
-      if (!d.trades || !d.trades.length) {
-        box.innerHTML = '<div class="panel-note" style="margin-top:8px">You\'re already close to the suggested mix. No trades needed.</div>';
-        return;
-      }
-      const rows = d.trades.map((t) => `
-        <div class="trade-row">
-          <span class="trade-act ${t.action}">${t.action.toUpperCase()}</span>
-          <span class="h-tick">${t.ticker}</span>
-          <span class="h-val" style="margin-left:auto">${money(t.dollars)}</span>
-        </div>`).join("");
-      box.innerHTML = `
-        <div class="chart-head" style="margin-top:12px;margin-bottom:6px">
-          <span class="chart-title">How to get there</span>
-          <span class="chart-sub">smallest trades dropped</span>
-        </div>
-        <div class="holdings-list" style="max-height:150px">${rows}</div>`;
-    } catch {}
+        ${escapeHtml(d.disclaimer || "This is a retrospective comparison, not a recommended allocation or trade plan.")}
+      </div>`;
   }
 
   function refreshPortfolio() {
@@ -2026,12 +2154,15 @@
           <button type="button" class="h-star${starred ? " on" : ""}" data-t="${tk}"
             title="${starred ? "Remove from" : "Add to"} your watchlist">${starred ? "★" : "☆"}</button>
         </span>
-        <span class="stock-price">${fmtPrice(d.price)} now</span>
+        <span class="stock-price">${fmtPrice(d.price)} series anchor</span>
       </div>
       <div class="stock-range">
-        In 12 months: roughly <b>${fmtPrice(d.pessimistic[last])}</b> to
-        <b>${fmtPrice(d.optimistic[last])}</b>, most likely
-        ${down ? "down, around" : "around"} <b style="color:${medCol}">${fmtPrice(d.median[last])}</b>.
+        Total-return-equivalent model range at 12 months: <b>${fmtPrice(d.pessimistic[last])}</b> to
+        <b>${fmtPrice(d.optimistic[last])}</b>; median simulated path
+        ${down ? "ends lower, near" : "ends near"} <b style="color:${medCol}">${fmtPrice(d.median[last])}</b>.
+      </div>
+      <div class="panel-note" style="border:0;padding:6px 0 0">
+        Illustration only, not a quoted share-price target or forecast.
       </div>
       ${projChartSVG(d, fmtPrice)}
     </div>`;
@@ -2057,7 +2188,6 @@
 
   async function loadStockCards() {
     stocksGrid.innerHTML = '<div class="stocks-empty">Working out estimated ranges…</div>';
-    loadHistoryCard();
     try {
       const res = await api("/stocks/projections", { headers: authHeaders() });
       if (!res.ok) {
@@ -2074,157 +2204,6 @@
     } catch {
       stocksGrid.innerHTML = '<div class="stocks-empty">Could not load estimates right now.</div>';
     }
-  }
-
-  // "How have I actually done?" chart above the stock cards.
-  async function loadHistoryCard() {
-    let card = document.getElementById("historyCard");
-    if (!card) {
-      card = document.createElement("div");
-      card.id = "historyCard";
-      card.className = "plan-card";
-      card.style.cssText = "margin-bottom:14px";
-      stocksGrid.parentElement.insertBefore(card, stocksGrid);
-    }
-    card.style.display = "none";
-    try {
-      const res = await api("/portfolio/history", { headers: authHeaders() });
-      if (!res.ok) return; // no dated holdings; keep it hidden
-      const d = await res.json();
-      const diff = d.portfolio_now - d.benchmark_now;
-      const beat = diff >= 0;
-      const summary = `worth ${money(d.portfolio_now)} now, `
-        + `${beat ? "ahead of" : "behind"} the S&P 500 by ${money(Math.abs(diff))}`;
-      card.style.display = "";
-      card.innerHTML = `
-        <div class="chart-head">
-          <span class="chart-title">Your money since ${friendlyDate(d.since)}</span>
-          <span class="chart-sub" id="histReadout"></span>
-        </div>
-        ${historyChartSVG(d)}
-        <div class="legend">
-          <span><span class="dot" style="background:var(--up)"></span>Your portfolio</span>
-          <span><span class="dot" style="background:var(--neutral)"></span>Same money in the S&amp;P 500</span>
-          <span style="margin-left:auto">point at the chart for exact numbers</span>
-        </div>`;
-      wireHistoryHover(card, d, summary);
-    } catch {}
-  }
-
-  const HIST = { W: 640, H: 170, L: 10, R: 58, T: 10, B: 18 };
-
-  function histScales(d) {
-    const { W, H, L, R, T, B } = HIST;
-    const all = d.portfolio.concat(d.benchmark);
-    let lo = Math.min(...all), hi = Math.max(...all);
-    const pad = (hi - lo || 1) * 0.06;
-    lo -= pad; hi += pad;
-    const n = d.dates.length;
-    return {
-      n, lo, hi,
-      X: (i) => L + (W - L - R) * (n > 1 ? i / (n - 1) : 0),
-      Y: (v) => T + (H - T - B) * (1 - (v - lo) / (hi - lo)),
-    };
-  }
-
-  // round dollar values that land inside the chart, e.g. 700, 750, 800
-  function moneyTicks(lo, hi) {
-    const raw = (hi - lo || 1) / 3.5;
-    const mag = Math.pow(10, Math.floor(Math.log10(raw)));
-    let step = mag * 10;
-    for (const m of [1, 2, 2.5, 5, 10]) if (mag * m >= raw) { step = mag * m; break; }
-    const ticks = [];
-    for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) ticks.push(v);
-    return ticks;
-  }
-
-  function shortDate(iso) {
-    const dt = new Date(iso + "T00:00:00");
-    if (isNaN(dt)) return iso;
-    return dt.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
-  }
-
-  function historyChartSVG(d) {
-    const { W, H, L, R, T, B } = HIST;
-    const s = histScales(d);
-    const line = (vals, color, w) =>
-      `<polyline points="${vals.map((v, i) => `${s.X(i).toFixed(1)},${s.Y(v).toFixed(1)}`).join(" ")}"
-        fill="none" style="stroke:${color}" stroke-width="${w}" stroke-linejoin="round"/>`;
-
-    let grid = "";
-    for (const v of moneyTicks(s.lo, s.hi)) {
-      grid += `<line x1="${L}" x2="${W - R}" y1="${s.Y(v).toFixed(1)}" y2="${s.Y(v).toFixed(1)}"
-          style="stroke:var(--chart-grid)" stroke-width="1"/>
-        <text x="${L + 2}" y="${(s.Y(v) - 3).toFixed(1)}" font-size="8.6" style="fill:var(--chart-label)"
-          font-family="ui-monospace,Consolas,monospace">${money(v)}</text>`;
-    }
-
-    const last = s.n - 1;
-    const mid = Math.floor(last / 2);
-    const xdates = last < 1 ? "" : `
-      <text x="${L}" y="${H - 4}" font-size="8.6" style="fill:var(--chart-label)">${shortDate(d.dates[0])}</text>
-      <text x="${(s.X(mid) - 16).toFixed(1)}" y="${H - 4}" font-size="8.6" style="fill:var(--chart-label)">${shortDate(d.dates[mid])}</text>
-      <text x="${(W - R - 34).toFixed(1)}" y="${H - 4}" font-size="8.6" style="fill:var(--chart-label)">${shortDate(d.dates[last])}</text>`;
-
-    // final values written next to where each line ends; nudge apart if they overlap
-    let yP = s.Y(d.portfolio[last]) + 3, yB = s.Y(d.benchmark[last]) + 3;
-    if (Math.abs(yP - yB) < 10) {
-      const c = (yP + yB) / 2;
-      const pAbove = yP <= yB;
-      yP = pAbove ? c - 5 : c + 5;
-      yB = pAbove ? c + 5 : c - 5;
-    }
-    const endLbls = `
-      <text x="${W - R + 5}" y="${yP.toFixed(1)}" font-size="8.8" font-weight="700" style="fill:var(--up)"
-        font-family="ui-monospace,Consolas,monospace">${money(d.portfolio[last])}</text>
-      <text x="${W - R + 5}" y="${yB.toFixed(1)}" font-size="8.4" style="fill:var(--chart-label)"
-        font-family="ui-monospace,Consolas,monospace">${money(d.benchmark[last])}</text>`;
-
-    return `<svg id="histSvg" class="proj-chart" style="max-width:100%" viewBox="0 0 ${W} ${H}" role="img"
-        aria-label="Your portfolio's value over time vs the S&amp;P 500">
-      ${grid}
-      ${line(d.benchmark, "var(--neutral)", 1.4)}
-      ${line(d.portfolio, "var(--up)", 2)}
-      ${endLbls}
-      ${xdates}
-      <g id="histCross" style="display:none">
-        <line id="histCrossLine" y1="${T}" y2="${H - B}" style="stroke:var(--line-strong)"
-          stroke-width="1" stroke-dasharray="3 3"/>
-        <circle id="histDotP" r="3" style="fill:var(--up)"/>
-        <circle id="histDotB" r="2.5" style="fill:var(--neutral)"/>
-      </g>
-    </svg>`;
-  }
-
-  // moving the mouse over the chart shows the exact numbers for that day
-  function wireHistoryHover(card, d, summary) {
-    const svg = card.querySelector("#histSvg");
-    const readout = card.querySelector("#histReadout");
-    if (!svg || !readout) return;
-    readout.textContent = summary;
-    const { W, L, R } = HIST;
-    const s = histScales(d);
-    const cross = svg.querySelector("#histCross");
-    const vline = svg.querySelector("#histCrossLine");
-    const dotP = svg.querySelector("#histDotP");
-    const dotB = svg.querySelector("#histDotB");
-    svg.addEventListener("mousemove", (e) => {
-      const rect = svg.getBoundingClientRect();
-      if (!rect.width) return;
-      const vx = ((e.clientX - rect.left) / rect.width) * W;
-      let i = Math.round(((vx - L) / (W - L - R)) * (s.n - 1));
-      i = Math.max(0, Math.min(s.n - 1, i));
-      const x = s.X(i).toFixed(1);
-      vline.setAttribute("x1", x); vline.setAttribute("x2", x);
-      dotP.setAttribute("cx", x); dotP.setAttribute("cy", s.Y(d.portfolio[i]).toFixed(1));
-      dotB.setAttribute("cx", x); dotB.setAttribute("cy", s.Y(d.benchmark[i]).toFixed(1));
-      cross.style.display = "";
-      readout.textContent = `${friendlyDate(d.dates[i])}: yours ${money(d.portfolio[i])} · S&P 500 ${money(d.benchmark[i])}`;
-    });
-    svg.addEventListener("mouseleave", () => {
-      cross.style.display = "none";
-      readout.textContent = summary;
-    });
   }
 
   async function searchStock() {
@@ -2283,7 +2262,6 @@
       planVol.value = p.max_volatility_pct;
       document.getElementById("planVolVal").textContent = `${p.max_volatility_pct}%`;
     }
-    if (p.goal) document.getElementById("planGoal").value = p.goal;
     if (p.monthly_contribution != null) document.getElementById("planMonthly").value = p.monthly_contribution;
     if (p.goal_amount != null) document.getElementById("planGoalAmt").value = p.goal_amount;
   }
@@ -2308,7 +2286,9 @@
       years_to_retirement: parseInt(document.getElementById("planYears").value, 10),
       risk_tolerance: parseInt(planRisk.value, 10),
       max_volatility_pct: parseFloat(planVol.value),
-      goal: document.getElementById("planGoal").value,
+      // Retained in the API only for backward-compatible stored profiles. It
+      // does not change the retirement heuristic and is not a suitability input.
+      goal: "balanced",
       monthly_contribution: parseFloat(document.getElementById("planMonthly").value) || 0,
       goal_amount: parseFloat(document.getElementById("planGoalAmt").value) || 0,
     };
@@ -2341,103 +2321,70 @@
   document.getElementById("savePlanBtn").addEventListener("click", savePlan);
 
   async function loadPlanResults() {
-    planResults.innerHTML = '<div class="stocks-empty">Working out your outlook and picks… first time can take a minute.</div>';
+    planResults.innerHTML = '<div class="stocks-empty">Running the illustrative scenarios…</div>';
     try {
-      const [retRes, recRes] = await Promise.all([
-        api("/plan/retirement", { headers: authHeaders() }),
-        api("/plan/recommendations", { headers: authHeaders() }),
-      ]);
+      const retRes = await api("/plan/retirement", { headers: authHeaders() });
       const ret = retRes.ok ? await retRes.json() : null;
-      const rec = recRes.ok ? await recRes.json() : null;
-      renderPlanResults(ret, rec);
+      renderPlanResults(ret);
     } catch {
       planResults.innerHTML = '<div class="stocks-empty">Could not load your plan results right now.</div>';
     }
   }
 
-  function renderPlanResults(ret, rec) {
+  function renderPlanResults(ret) {
     let html = "";
 
     if (ret) {
       const last = ret.years.length - 1;
       const y = ret.years[last];
       const half = Math.round(y / 2);
-      const hasGoal = ret.goal && ret.p_goal != null;
-      const pPct = hasGoal ? Math.round(ret.p_goal * 100) : 0;
-      const pCls = pPct >= 60 ? "pos" : "neg";
+      const goalShare = ret.goal_simulation_share ?? ret.p_goal;
+      const hasGoal = ret.goal && goalShare != null;
+      const pPct = hasGoal ? Math.round(goalShare * 100) : 0;
       const goalTile = hasGoal
-        ? `<div class="tile" title="Share of the 1,000 simulations that end at or above your goal">
-             <div class="k">Chance of ${money(ret.goal)}</div><div class="v ${pCls}">${pPct}%</div></div>`
-        : "";
-      const goalNote = hasGoal && ret.monthly_needed != null
-        ? `<div class="risk-note warn" style="margin-top:10px">To give your ${money(ret.goal)} goal
-             a 60% chance, you'd need to add about <b>${money(ret.monthly_needed)}/month</b>
-             (you're at ${money(ret.assumptions.monthly)}).</div>`
+        ? `<div class="tile" title="Share of this model's simulated paths ending at or above the nominal goal; not a calibrated real-world probability">
+             <div class="k">Modeled paths reaching ${money(ret.goal)}</div><div class="v">${pPct}%</div></div>`
         : "";
       html += `
         <div class="plan-card" style="align-self:stretch">
           <div class="chart-head">
-            <span class="chart-title">The road to retirement</span>
-            <span class="chart-sub">assumes ~${(ret.assumptions.mu * 100).toFixed(0)}%/yr growth,
+            <span class="chart-title">Retirement assumption explorer</span>
+            <span class="chart-sub">scenario: assumes ~${(ret.assumptions.mu * 100).toFixed(0)}%/yr growth,
               ${(ret.assumptions.sigma * 100).toFixed(0)}% yearly swings</span>
           </div>
           <div class="tiles" style="grid-template-columns:repeat(${hasGoal ? 4 : 3},1fr);margin-top:10px">
-            <div class="tile"><div class="k">Most likely</div><div class="v">${money(ret.median[last])}</div></div>
-            <div class="tile"><div class="k">If markets are kind</div><div class="v">${money(ret.optimistic[last])}</div></div>
-            <div class="tile"><div class="k">If they're rough</div><div class="v">${money(ret.pessimistic[last])}</div></div>
+            <div class="tile"><div class="k">Median simulated outcome</div><div class="v">${money(ret.median[last])}</div></div>
+            <div class="tile"><div class="k">Upper modeled percentile</div><div class="v">${money(ret.optimistic[last])}</div></div>
+            <div class="tile"><div class="k">Lower modeled percentile</div><div class="v">${money(ret.pessimistic[last])}</div></div>
             ${goalTile}
           </div>
-          ${goalNote}
           ${projChartSVG({ months: ret.years, median: ret.median, optimistic: ret.optimistic, pessimistic: ret.pessimistic },
                          money, ["Now", `+${half} yr`, `+${y} yr`])}
           <div class="panel-note">
-            1,000 simulated futures for your money over ${y} years at the risk level
-            you picked: bigger swings mean more expected growth but a much wider range
-            of outcomes. Includes ${money(ret.assumptions.monthly)}/month added along
-            the way (${money(ret.total_contributed)} put in altogether). The band covers
-            the middle two-thirds of outcomes. Real life can be better or worse.
+            ${Number(ret.assumptions.sims || 1000).toLocaleString()} model paths over
+            ${y} years at the risk level you picked. This heuristic assumes that
+            accepting bigger swings earns a higher average return; that relationship
+            is not guaranteed. Includes ${money(ret.assumptions.monthly)}/month added
+            along the way; the starting balance plus modeled additions total
+            ${money(ret.total_contributed)} nominal dollars. The band shows the
+            16th to 84th modeled percentiles.
+            ${hasGoal ? "The goal percentage is only a share of these modeled paths, not the probability that you will reach the goal." : ""}
+          </div>
+          <div class="panel-note assumption-note">
+            <b>What this does and doesn't use.</b> This models
+            <b>the risk level you selected</b>, not the stocks you actually own —
+            only your starting balance (${money(ret.assumptions.starting_value)})
+            comes from your portfolio. The
+            ${(ret.assumptions.mu * 100).toFixed(0)}%/yr growth figure is
+            <i>assumed</i> from a simple rule
+            (${escapeHtml(ret.assumptions.return_model || "")}), not measured from
+            your holdings. Treat it as a way to compare scenarios &mdash; saving more,
+            or taking more or less risk &mdash; rather than a prediction of what your
+            portfolio will be worth. Unless explicitly stated otherwise, amounts are
+            nominal and the model omits inflation, taxes, fees, Social Security,
+            withdrawals, longevity, and market regime changes.
           </div>
         </div>`;
-    }
-
-    if (rec && rec.portfolio_check) {
-      const c = rec.portfolio_check;
-      const pv = (c.portfolio_volatility * 100).toFixed(0);
-      html += c.too_risky
-        ? `<div class="risk-note warn"><b>Heads up:</b> your portfolio swings about ${pv}% a year,
-           more than the ${c.max_volatility_pct}% you said you're comfortable with.
-           The steadier picks below could bring that down.</div>`
-        : `<div class="risk-note ok">Your portfolio swings about ${pv}% a year, within the
-           ${c.max_volatility_pct}% you said you're comfortable with.</div>`;
-    }
-
-    if (rec && rec.recommendations && rec.recommendations.length) {
-      const rows = rec.recommendations.map((r) => {
-        const ret2 = r.est_annual_return * 100;
-        return `<div class="rec-row">
-          <div class="rec-top">
-            <span class="rec-tick">${escapeHtml(r.ticker)}</span>
-            <span class="rec-sector">${escapeHtml(r.sector)}</span>
-            ${r.owned ? '<span class="rec-own">YOU OWN IT</span>' : ""}
-            <span class="rec-ret ${ret2 >= 0 ? "pos" : "neg"}">${ret2 >= 0 ? "+" : ""}${ret2.toFixed(0)}%/yr</span>
-            <span class="rec-vol">${(r.volatility * 100).toFixed(0)}% swings</span>
-          </div>
-          <div class="rec-why">${escapeHtml(r.why)}</div>
-        </div>`;
-      }).join("");
-      html += `
-        <div class="plan-card" style="align-self:stretch;padding:0">
-          <div class="plan-card-title" style="padding:14px 14px 10px;margin-bottom:0">
-            Stocks that fit your plan</div>
-          ${rows}
-          <div class="panel-note" style="padding:10px 14px 14px;border-top:1px solid var(--line)">
-            Screened from 48 large, well-known US companies: anything swingier than your
-            limit is excluded, and the rest are ranked by how well they match your risk
-            level and goal. A starting point for research, not advice.
-          </div>
-        </div>`;
-    } else if (rec) {
-      html += '<div class="stocks-empty">No stocks fit those limits. Try allowing bigger swings.</div>';
     }
 
     planResults.innerHTML = html || '<div class="stocks-empty">Could not load results. Try saving again.</div>';
@@ -2454,18 +2401,23 @@
       const noNews = !h.n_headlines;
       const cls = noNews || Math.abs(h.score) < 0.005 ? "flat" : h.score > 0 ? "up" : "down";
       const scoreLabel = noNews ? "n/a" : `${h.score >= 0 ? "+" : ""}${h.score.toFixed(2)}`;
-      const sig = h.signal.toLowerCase(); // buy | hold | sell
-      const mood = h.label === "Bullish" ? "Mostly good news"
-        : h.label === "Bearish" ? "Mostly bad news" : "Mixed news";
+      // Descriptive news tone, never a trade instruction. The backend returns
+      // "Positive tone" / "Mixed" / "Negative tone" / "No data".
+      const tone = String(h.tone || "No data");
+      const toneCls = tone === "Positive tone" ? "pos"
+        : tone === "Negative tone" ? "neg" : "neu";
+      const mood = tone === "Positive tone" ? "Mostly positive headline language"
+        : tone === "Negative tone" ? "Mostly negative headline language"
+        : tone === "Mixed" ? "Mixed headline language" : "No recent headline sample";
       const divNote = h.income ? ` Pays about ${money(h.income)}/yr in dividends.` : "";
       const tk = escapeHtml(h.ticker);
-      const sigLabel = escapeHtml(String(h.signal).toUpperCase());
+      const toneLabel = escapeHtml(tone);
       return `<div class="holding-row" data-ticker="${tk}" title="${(noNews ? "No recent news found"
           : `${mood} (${h.n_headlines} recent headlines)`) + divNote} Click for headlines.">
         <span class="h-tick">${tk}</span>
         <span class="h-val">${money(h.value)}</span>
         <span class="h-score ${cls}">${scoreLabel}</span>
-        <span class="h-sig ${sig}">${sigLabel}</span>
+        <span class="h-tone ${toneCls}">${toneLabel}</span>
         <button type="button" class="h-del" data-t="${tk}" title="Remove ${tk} from your portfolio">✕</button>
       </div>`;
     }).join("");
@@ -2476,7 +2428,7 @@
         <input id="addShares" type="number" placeholder="Shares" min="0" step="any" style="width:76px">
         <input id="addCost" type="number" placeholder="Avg cost $" min="0" step="any" style="flex:1">
         <button type="button" class="mini-tab active" id="addConfirm">Add</button>
-      </div>${addErr ? `<div class="add-err">${addErr}</div>` : ""}` : "";
+      </div>${addErr ? `<div class="add-err">${escapeHtml(addErr)}</div>` : ""}` : "";
 
     holdingsBox.innerHTML = `
       <div class="chart-head" style="margin-bottom:8px">
@@ -2489,8 +2441,11 @@
       <div class="holdings-list">${addForm}${rows}</div>
       <div class="panel-note" style="border-top:none;padding-top:6px">
         ${holdingsData.total_income ? `Your holdings pay about <b>${money(holdingsData.total_income)}/yr</b> in dividends. ` : ""}
-        Scores run from &minus;1 (bad news) to +1 (good news); the tag follows
-        the news mood. Click a stock for its headlines. Not advice.
+        Scores run from &minus;1 (negative coverage) to +1 (positive coverage), and
+        the tag describes the <b>tone of recent headlines</b> &mdash; not a rating and
+        not a suggestion to trade. Coverage of fewer than 3 articles is shown as
+        &ldquo;No data&rdquo; because a couple of headlines say nothing reliable.
+        Click a stock for its headlines.
       </div>`;
 
     document.getElementById("addToggle").addEventListener("click", () => {
@@ -2532,7 +2487,7 @@
         const d = await res.json().catch(() => ({}));
         box.innerHTML = `<div class="headline">${isStaleBackend(res, d)
           ? STALE_BACKEND_MSG
-          : (d.detail || "No headlines found.")}</div>`;
+          : escapeHtml(d.detail || "No headlines found.")}</div>`;
         return;
       }
       const d = await res.json();
@@ -2648,7 +2603,7 @@
             <div class="alert-row${a.seen ? "" : " unseen"}">${escapeHtml(a.message)}
               <div class="alert-time">${friendlyDate(a.created_at.slice(0, 10))}</div>
             </div>`).join("")
-        : '<div class="alert-row">Nothing to report. You\'ll see a note here if your portfolio drops sharply or a stock\'s news turns negative.</div>');
+        : '<div class="alert-row">Nothing to report. Notices use an imported holding-mix historical proxy and sampled headline tone; neither is actual account performance or a detected change in sentiment.</div>');
     bellPop.style.display = "";
     if (alertsData.some((a) => !a.seen)) {
       try { await api("/alerts/seen", { method: "POST", headers: authHeaders() }); } catch {}
@@ -2670,6 +2625,38 @@
     document.getElementById("modalBack")?.remove();
   }
 
+  // Risk disclosures. Fetched from /legal/disclosures so the wording lives in
+  // one place on the server and can't drift from what the API states.
+  document.getElementById("disclosuresLink").addEventListener("click", async (e) => {
+    e.preventDefault();
+    showModal('<div class="modal-title">Risk disclosures</div><p>Loading…</p>');
+    try {
+      const res = await fetch(API_BASE + "/legal/disclosures");
+      const d = await res.json();
+      const limits = (d.model_limitations || [])
+        .map((x) => `<li>${escapeHtml(x)}</li>`).join("");
+      showModal(`
+        <div class="modal-title">Risk disclosures</div>
+        <p><b>Not investment advice.</b> ${escapeHtml(d.not_advice || "")}</p>
+        <p><b>Not recommendations.</b> ${escapeHtml(d.no_recommendations || "")}</p>
+        <p><b>Past performance.</b> ${escapeHtml(d.past_performance || "")}</p>
+        <p><b>What the models can't do.</b></p>
+        <ul style="margin:0 0 10px 18px;padding:0">${limits}</ul>
+        <p><b>Market data.</b> ${escapeHtml(d.data || "")}</p>
+        <p><b>The AI assistant.</b> ${escapeHtml(d.ai || "")}</p>
+        <p style="margin-top:14px">
+          <a href="/terms" target="_blank" rel="noopener">Terms of Service</a> ·
+          <a href="/privacy" target="_blank" rel="noopener">Privacy Policy</a>
+        </p>
+        <button type="button" class="modal-close mini-tab">Close</button>`);
+    } catch {
+      showModal(`<div class="modal-title">Risk disclosures</div>
+        <p>Couldn't load the disclosures right now. Evergreen is an educational
+        tool and is not investment advice.</p>
+        <button type="button" class="modal-close mini-tab">Close</button>`);
+    }
+  });
+
   document.getElementById("accountEmail").addEventListener("click", async () => {
     const open = accountPop.style.display !== "none";
     closePops();
@@ -2681,7 +2668,7 @@
     } catch {}
     const darkNow = document.documentElement.dataset.theme === "dark";
     accountPop.innerHTML = `
-      <div class="pop-title">${userEmail}</div>
+      <div class="pop-title">${escapeHtml(userEmail)}</div>
       <button type="button" class="pop-item" id="miTheme">Switch to ${darkNow ? "light" : "dark"} mode</button>
       <button type="button" class="pop-item" id="miName">${userName ? "Change" : "Set"} your name</button>
       <button type="button" class="pop-item" id="miActivity">Recent activity</button>
@@ -2702,7 +2689,7 @@
     document.getElementById("miName").addEventListener("click", () => {
       closePops();
       showModal(`<h3>${userName ? "Change" : "Set"} your name</h3>
-        <div class="field"><label>Name</label><input id="nmVal" type="text" maxlength="60" autocomplete="name" value="${userName.replace(/"/g, "&quot;")}"></div>
+        <div class="field"><label>Name</label><input id="nmVal" type="text" maxlength="60" autocomplete="name" value="${escapeHtml(userName)}"></div>
         <div class="modal-err" id="nmErr"></div>
         <div class="modal-actions">
           <button class="btn-quiet modal-close">Cancel</button>
@@ -2720,7 +2707,6 @@
           const d = await res.json().catch(() => ({}));
           if (!res.ok) { err.textContent = d.detail || "Could not save your name."; return; }
           userName = d.name;
-          localStorage.setItem("authName", userName);
           document.getElementById("accountEmail").textContent = userName || userEmail;
           closeModal();
         } catch { err.textContent = "Could not reach the server."; }
@@ -2785,8 +2771,6 @@
           });
           const d = await res.json().catch(() => ({}));
           if (!res.ok) { err.textContent = d.detail || "Could not change password."; return; }
-          token = d.token;
-          localStorage.setItem("authToken", token);
           closeModal();
         } catch { err.textContent = "Could not reach the server."; }
       });
@@ -2817,36 +2801,62 @@
         });
         return;
       }
-      try {
-        const res = await api("/auth/2fa/setup", { method: "POST", headers: authHeaders() });
-        if (!res.ok) return;
-        const d = await res.json();
-        showModal(`<h3>Turn on two-factor sign-in</h3>
-          <p style="font-size:0.8rem;line-height:1.5">Scan this QR code with Google Authenticator,
-            Authy, or any authenticator app, then enter the 6-digit code it shows.</p>
-          <img class="modal-qr" src="${d.qr}" alt="QR code for authenticator app">
-          <div class="modal-secret">${d.secret}</div>
-          <div class="field" style="margin-top:10px"><label>6-digit code</label>
-            <input id="tfCode" inputmode="numeric" maxlength="6" placeholder="123456"></div>
-          <div class="modal-err" id="tfErr"></div>
-          <div class="modal-actions">
-            <button class="btn-quiet modal-close">Cancel</button>
-            <button class="btn-primary" id="tfGo">Turn on</button>
-          </div>`);
-        document.getElementById("tfGo").addEventListener("click", async () => {
-          const err = document.getElementById("tfErr");
-          try {
-            const res2 = await api("/auth/2fa/enable", {
-              method: "POST",
-              headers: authHeaders({ "Content-Type": "application/json" }),
-              body: JSON.stringify({ code: document.getElementById("tfCode").value }),
-            });
-            const d2 = await res2.json().catch(() => ({}));
-            if (!res2.ok) { err.textContent = d2.detail || "Wrong code."; return; }
-            closeModal();
-          } catch { err.textContent = "Could not reach the server."; }
-        });
-      } catch {}
+      showModal(`<h3>Turn on two-factor sign-in</h3>
+        <p style="font-size:0.8rem;line-height:1.5">Confirm your password before
+          Evergreen creates a new authenticator secret.</p>
+        <div class="field"><label>Current password</label>
+          <input id="tfSetupPw" type="password" autocomplete="current-password"></div>
+        <div class="modal-err" id="tfSetupErr"></div>
+        <div class="modal-actions">
+          <button class="btn-quiet modal-close">Cancel</button>
+          <button class="btn-primary" id="tfSetupGo">Continue</button>
+        </div>`);
+      document.getElementById("tfSetupGo").addEventListener("click", async () => {
+        const setupErr = document.getElementById("tfSetupErr");
+        try {
+          const res = await api("/auth/2fa/setup", {
+            method: "POST",
+            headers: authHeaders({ "Content-Type": "application/json" }),
+            body: JSON.stringify({
+              password: document.getElementById("tfSetupPw").value,
+            }),
+          });
+          const d = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            setupErr.textContent = d.detail || "Could not start two-factor setup.";
+            return;
+          }
+          const qr = /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(String(d.qr || ""))
+            ? d.qr : "";
+          showModal(`<h3>Turn on two-factor sign-in</h3>
+            <p style="font-size:0.8rem;line-height:1.5">Scan this QR code with Google Authenticator,
+              Authy, or any authenticator app, then enter the 6-digit code it shows.</p>
+            ${qr ? `<img class="modal-qr" src="${qr}" alt="QR code for authenticator app">` : ""}
+            <div class="modal-secret">${escapeHtml(d.secret || "")}</div>
+            <div class="field" style="margin-top:10px"><label>6-digit code</label>
+              <input id="tfCode" inputmode="numeric" maxlength="6" placeholder="123456"></div>
+            <div class="modal-err" id="tfErr"></div>
+            <div class="modal-actions">
+              <button class="btn-quiet modal-close">Cancel</button>
+              <button class="btn-primary" id="tfGo">Turn on</button>
+            </div>`);
+          document.getElementById("tfGo").addEventListener("click", async () => {
+            const err = document.getElementById("tfErr");
+            try {
+              const res2 = await api("/auth/2fa/enable", {
+                method: "POST",
+                headers: authHeaders({ "Content-Type": "application/json" }),
+                body: JSON.stringify({ code: document.getElementById("tfCode").value }),
+              });
+              const d2 = await res2.json().catch(() => ({}));
+              if (!res2.ok) { err.textContent = d2.detail || "Wrong code."; return; }
+              closeModal();
+            } catch { err.textContent = "Could not reach the server."; }
+          });
+        } catch {
+          setupErr.textContent = "Could not reach the server.";
+        }
+      });
     });
 
     document.getElementById("miDelete").addEventListener("click", () => {
@@ -2881,13 +2891,37 @@
   // ---------------- boot ----------------
   (async function boot() {
     const params = new URLSearchParams(location.search);
+    const fragment = new URLSearchParams(location.hash.replace(/^#/, ""));
+
     // Arrived from a password-reset email link: show the "new password" card.
-    if (params.get("reset")) {
-      resetToken = params.get("reset");
+    if (fragment.get("reset") || params.get("reset")) {
+      resetToken = fragment.get("reset") || params.get("reset");
       history.replaceState(null, "", location.pathname);
       showAuthCard("reset");
       return; // stay on the auth view to set a new password
     }
+
+    // Verification secrets also arrive in the fragment so they never appear in
+    // proxy/server request logs. Exchange the token in a JSON request body.
+    if (fragment.get("verify")) {
+      const verificationToken = fragment.get("verify");
+      history.replaceState(null, "", location.pathname);
+      const msg = document.getElementById("authMsg");
+      try {
+        const verified = await fetch(API_BASE + "/auth/verify", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token: verificationToken }),
+        });
+        msg.textContent = verified.ok ? "Email verified — you're all set."
+          : "That verification link is invalid or has expired.";
+      } catch {
+        msg.textContent = "Could not verify the email right now. Please try the link again.";
+      }
+      msg.style.display = "";
+    }
+
     // Arrived back from an email-verification link.
     if (params.get("verified") !== null) {
       const v = params.get("verified");
@@ -2897,15 +2931,18 @@
         : "That verification link is invalid or has expired.";
       msg.style.display = "";
     }
-    if (!token) return; // show auth view
     try {
-      const res = await fetch(API_BASE + "/me", { headers: authHeaders() });
+      // Use the shared API wrapper so an otherwise-valid session older than
+      // the rotation threshold is refreshed at this safe page-load boundary.
+      const res = await api("/me", { headers: authHeaders() });
       if (res.ok) {
         const d = await res.json();
         userEmail = d.email;
         userName = d.name || "";
-        localStorage.setItem("authName", userName);
-        enterApp();
+        await enterApp();
+        if (d.policy_accepted === false) {
+          showPolicyGate(d.policy_version, "Please review and accept the current policies.");
+        }
         return;
       }
     } catch {}

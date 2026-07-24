@@ -2,16 +2,78 @@ services:
   app:
     build: .
     restart: unless-stopped
-    env_file: .env            # OPENAI_API_KEY lives here; never commit it
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    # Copy .env.example to .env and fill every production-required value.
+    # Secrets (master/backup keys, provider, email, OpenAI, Sentry) stay in
+    # .env or your deployment secret manager; never put literal values here.
+    env_file: .env
+    environment:
+      # The image defaults to production, which makes the startup audit fatal:
+      # the app refuses to boot without EVERGREEN_MASTER_KEY and a provider
+      # configuration whose required contractual rights the operator attests.
+      # Both come from .env — see .env.example.
+      - EVERGREEN_ENV=${EVERGREEN_ENV:-production}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - APP_ORIGINS=${APP_ORIGINS:-https://${DOMAIN:-localhost}}
+      # Uvicorn accepts proxy headers only from Caddy's fixed internal IP.
+      # Never use "*" here. Override only when deploying behind a known proxy.
+      - FORWARDED_ALLOW_IPS=${TRUSTED_PROXY_IPS:-172.31.254.10}
+      # Runtime data goes in a subdirectory so the volume below does NOT mount
+      # over /app and shadow the application code (which would silently pin the
+      # deployment to whatever code first populated the volume).
+      - EVERGREEN_DATA_DIR=/app/data
     volumes:
-      - appdata:/app          # keeps app.db, cache/, charts/, chat_memory/
+      - appdata:/app/data      # app.db, cache/, encrypted backups/
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
     expose:
       - "8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - backend
+
+  # Shared state for rate limiting, account lockout and pending 2FA. Redis makes
+  # that security state consistent, but SQLite still limits the public app to
+  # one process/replica until database and job controls are externalized.
+  redis:
+    image: redis:7.4.9-alpine
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    # Security state is ephemeral but bounded. Under memory pressure Redis
+    # evicts the least-frequently-used keys; that can discard a cold lockout or
+    # rate-limit window, so operators must alert on Redis memory/evictions.
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - 128mb
+      - --maxmemory-policy
+      - allkeys-lfu
+    tmpfs:
+      - /data:rw,noexec,nosuid,nodev,size=64m
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    networks:
+      - backend
 
   # HTTPS in ~3 lines: Caddy fetches and renews Let's Encrypt certificates
   # automatically once DOMAIN points at this machine.
   caddy:
-    image: caddy:2-alpine
+    image: caddy:2.11.4-alpine
     restart: unless-stopped
     ports:
       - "80:80"
@@ -21,7 +83,20 @@ services:
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddydata:/data
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      backend:
+        ipv4_address: 172.31.254.10
 
 volumes:
   appdata:
   caddydata:
+
+networks:
+  backend:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.31.254.0/24

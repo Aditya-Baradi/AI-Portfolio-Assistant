@@ -1,20 +1,15 @@
 """
-Profile-driven stock recommendations and retirement projections.
+Offline research helpers and the retirement scenario engine.
 
-The user's saved profile (years to retirement, risk tolerance 1-10, max
-volatility, goal, monthly contribution) drives two things:
+The public application calls only ``retirement_paths`` and
+``target_volatility`` from this module. The legacy security-screen and trade
+calculation functions remain for offline regression/research compatibility;
+they are not registered as HTTP or model tools and must not be presented as
+personalized recommendations.
 
-1. recommend_stocks(): screens a fixed universe of large, liquid US names.
-   Anything more volatile than the user's stated maximum is excluded, then
-   candidates are scored by how well their volatility matches the target
-   implied by the risk score and by the goal (growth favours realized
-   returns, income favours defensive sectors + steadiness, balanced favours
-   risk-adjusted return). Scoring is deliberately transparent - every pick
-   comes with a plain-English "why".
-
-2. retirement_paths(): Monte Carlo of portfolio value until retirement with
-   monthly contributions, reporting the median and the 16th/84th percentile
-   band (roughly +/-1 sigma).
+The retirement engine is itself only a simplified nominal-dollar scenario. It
+reports a median and 16th/84th percentile band under stated assumptions; these
+are simulated model outputs, not forecasts or real-world probabilities.
 """
 from __future__ import annotations
 
@@ -218,13 +213,24 @@ def retirement_paths(mu: float, sigma: float, value0: float, monthly: float,
         "median": med,
         "optimistic": hi,
         "pessimistic": lo,
+        "median_label": "median simulated nominal-dollar outcome",
+        "optimistic_label": "84th percentile simulated nominal-dollar outcome",
+        "pessimistic_label": "16th percentile simulated nominal-dollar outcome",
         "total_contributed": round(total_in, 2),
         "assumptions": {"mu": round(mu, 4), "sigma": round(sigma, 4),
-                        "monthly": float(monthly), "sims": sims},
+                        "monthly": float(monthly), "sims": sims,
+                        "currency_basis": "nominal dollars; inflation not modeled",
+                        "return_distribution": "independent annual normal draws clipped at -95%"},
     }
     if goal and goal > 0:
         out["goal"] = float(goal)
-        out["p_goal"] = round(float((values >= goal).mean()), 3)
+        simulated_share = round(float((values >= goal).mean()), 3)
+        # Kept as a compatibility alias for existing clients. This is not a
+        # calibrated real-world probability.
+        out["p_goal"] = simulated_share
+        out["goal_simulation_share"] = simulated_share
+        out["goal_metric_label"] = "share of modeled paths meeting nominal goal"
+        out["goal_metric_is_probability"] = False
     return out
 
 

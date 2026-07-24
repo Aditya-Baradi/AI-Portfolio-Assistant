@@ -1,7 +1,7 @@
 """Tests for allocation blending and sector aggregation (pure functions, offline)."""
 import pytest
 
-from api.predict_agent import _blend_allocations
+from api.predict_agent import _blend_allocations, _validated_allocation
 from api.portfolio_core import sector_weights_from_weights, SECTOR_ETF_MAP
 
 
@@ -35,6 +35,17 @@ class TestBlendAllocations:
     def test_all_weights_non_negative(self):
         out = _blend_allocations({"A": 0.6, "B": 0.4}, {"A": 0.1, "B": 0.9}, 0.3)
         assert all(v >= 0 for v in out.values())
+
+    def test_post_validation_rejects_cap_violation(self):
+        with pytest.raises(ValueError, match="max_weight"):
+            _validated_allocation(
+                {"A": 0.9, "B": 0.1}, ["A", "B"], max_weight=0.6
+            )
+
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), -0.1])
+    def test_post_validation_rejects_invalid_weight(self, bad):
+        with pytest.raises(ValueError):
+            _validated_allocation({"A": bad, "B": 1.0}, ["A", "B"])
 
 
 class TestSectorAggregation:

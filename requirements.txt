@@ -1,61 +1,64 @@
-langchain==0.1.20
-langchain-core==0.1.52
-langchain-openai==0.1.6
+# Evergreen — application dependencies.
+#
+# This is the production CORE set: web app + analytics. Test and audit tooling
+# is in requirements-dev.txt so it is not shipped in the runtime image.
+#
+# The offline reinforcement-learning research stack (FinRL/torch) is NOT here.
+# It conflicts with the production market-data tree and carries the bulk of the
+# historical CVE surface. It is not a supported public runtime feature.
+#
+#     pip install -r requirements.txt          # core app (recommended)
+#     pip install -r requirements-dev.txt      # local tests and audit tooling
+#
+# The research-only RL manifest is deliberately isolated in
+# requirements-rl.txt because it conflicts with the production market-data
+# stack. Do not install the two manifests into one environment.
 
-
-
-
-numpy<2.0
+# --- core numeric stack ---
+numpy==1.26.4
 pandas==2.1.4
-scikit-learn==1.3.2
-scipy<1.12
+scikit-learn==1.5.2
+scipy==1.11.4
 
-finrl==0.3.7
+# --- portfolio optimization ---
 PyPortfolioOpt==1.5.6
 
-# FinRL 0.3.7 runtime deps (not pulled in automatically by its metadata).
-# gymnasium/stable-baselines3/torch power the RL agent; stockstats builds the
-# technical indicators; exchange_calendars/alpaca-trade-api/wrds satisfy FinRL's
-# eager data-source imports (only Yahoo is actually used at runtime).
-gymnasium==0.29.1
-stable-baselines3==2.3.2
-torch==2.2.2
-stockstats==0.6.8
-exchange_calendars
-alpaca-trade-api==3.2.0
-wrds
-# alpaca-trade-api pins websockets<11 but yfinance needs >=12 for websockets.sync
-websockets==13.1
+# --- LLM agent ---
+# Direct OpenAI tool calling. Exact pin verified against the package index;
+# future major/minor upgrades require dependency and behavioral validation.
+openai==2.46.0
 
-# News sentiment analysis
+# --- market data ---
+# yfinance is the DEVELOPMENT default; this project has no contract granting
+# it public display or redistribution rights. Set MARKET_DATA_PROVIDER to an
+# adapter covered by your executed agreement for a public deployment. The
+# startup audit also requires an explicit operator entitlement attestation.
+yfinance==0.2.66
+pandas-datareader==0.10.0  # Stooq fallback provider
+
+# --- news sentiment ---
 vaderSentiment==3.3.2
 # Optional higher-accuracy backend: pip install transformers, then set
 # SENTIMENT_BACKEND=finbert (downloads ProsusAI/finbert, ~440MB, on first use).
 
-# Charts (equity curves in chat)
-matplotlib
+# --- web backend ---
+fastapi==0.139.2
+uvicorn[standard]==0.51.0
+python-multipart==0.0.32
 
-# Testing
-pytest
+# --- auth, crypto, and secrets ---
+bcrypt==4.3.0
+pyotp==2.10.0
+qrcode==8.2
+cryptography==46.0.7
 
-yfinance==0.2.66
-
-openai==1.35.0
-
-# API backend (api/backend.py)
-fastapi
-uvicorn[standard]
-python-multipart>=0.0.18   # <0.0.7 CVE-2024-24762, <0.0.18 DoS advisories
-
-# Auth (password hashing + two-factor sign-in)
-bcrypt
-pyotp
-qrcode
-
-# Fallback price source when Yahoo hiccups (Stooq)
-pandas-datareader
-
-requests>=2.32.4   # 2.31.0 has CVE-2024-35195 (verify-bypass on reused Session)
-python-dotenv>=1.2.2   # 1.0.1 has PYSEC-2026-2270
-
+# --- http + config ---
 httpx==0.27.2
+requests==2.34.2
+python-dotenv==1.2.2
+
+# --- production operations ---
+# Compose sets REDIS_URL by default, so the client is a runtime dependency.
+# Sentry is installed in all environments and required by the production audit.
+redis==8.0.1
+sentry-sdk==2.66.0

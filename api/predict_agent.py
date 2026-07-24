@@ -2,12 +2,10 @@ import os
 import json
 import warnings
 from datetime import datetime, timedelta
-from collections import Counter, defaultdict
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from collections import defaultdict
 
 import numpy as np
 import pandas as pd
-import yfinance as yf
 
 try:
     from .data_cache import cached_download, cached_sectors
@@ -16,7 +14,6 @@ except ImportError:  # running as a plain script
 
 
 
-import warnings
 from importlib import import_module
 
 FINRL_AVAILABLE = False
@@ -142,36 +139,30 @@ def _download_price_matrix(tickers, start_date, end_date):
     """
     df = cached_download(tickers, start=start_date, end=end_date, auto_adjust=True, progress=False)
     if df is None or df.empty:
-        raise ValueError("No price data returned by yfinance.")
+        raise ValueError("No price data returned by the market data provider.")
 
+    def _pick(frame):
+        """Adjusted closes out of either column layout, or None."""
+        if isinstance(frame.columns, pd.MultiIndex):
+            lvl0 = set(frame.columns.get_level_values(0))
+            field = "Close" if "Close" in lvl0 else ("Adj Close" if "Adj Close" in lvl0 else None)
+            return frame[field] if field else None
+        field = "Close" if "Close" in frame.columns else (
+            "Adj Close" if "Adj Close" in frame.columns else None)
+        if field is None:
+            return None
+        out = frame[[field]].copy()
+        out.columns = [tickers[0] if isinstance(tickers, (list, tuple)) else str(tickers)]
+        return out
 
-    if isinstance(df.columns, pd.MultiIndex):
-        lvl0 = df.columns.get_level_values(0)
-        if "Close" in set(lvl0):
-            prices = df["Close"]
-        else:
-
-            df2 = yf.download(tickers, start=start_date, end=end_date, auto_adjust=False, progress=False)
-            if isinstance(df2.columns, pd.MultiIndex) and "Adj Close" in set(df2.columns.get_level_values(0)):
-                prices = df2["Adj Close"]
-            else:
-                prices = df2["Close"]
-    else:
-        
-        if "Close" in df.columns:
-            prices = df[["Close"]].copy()
-            colname = tickers[0] if isinstance(tickers, (list, tuple)) else str(tickers)
-            prices.columns = [colname]
-        else:
-            df2 = yf.download(tickers, start=start_date, end=end_date, auto_adjust=False, progress=False)
-            if "Adj Close" in df2.columns:
-                prices = df2[["Adj Close"]].copy()
-                colname = tickers[0] if isinstance(tickers, (list, tuple)) else str(tickers)
-                prices.columns = [colname]
-            else:
-                prices = df2[["Close"]].copy()
-                colname = tickers[0] if isinstance(tickers, (list, tuple)) else str(tickers)
-                prices.columns = [colname]
+    prices = _pick(df)
+    if prices is None:
+        # Providers that only expose unadjusted closes under a different field.
+        df2 = cached_download(tickers, start=start_date, end=end_date,
+                              auto_adjust=False, progress=False)
+        prices = _pick(df2) if df2 is not None and not df2.empty else None
+    if prices is None:
+        raise ValueError("Downloaded data has no Close/Adj Close prices.")
 
     prices = prices.dropna(axis=0, how="all").dropna(axis=1, how="any")
     if prices.empty:
@@ -341,8 +332,6 @@ def run_finrl_portfolio_optimization(tickers, start_date, end_date, timesteps=50
 
     return allocation, df_daily_return, df_actions
 
-from math import floor
-
 def compute_portfolio_value(mv_map: dict | None, default_if_missing: float = 10_000.0) -> float:
     """
     Sum current market values from your JSON (mv_map). If none available, use a sensible default.
@@ -365,8 +354,15 @@ def compute_dollar_targets(allocation: dict[str, float], portfolio_value: float)
 def get_last_prices(tickers: list[str]) -> dict[str, float]:
     """
     Get the most recent adjusted close for each ticker (robust to single/multi ticker shapes).
+
+    Uses an explicit date window rather than a relative period so it works
+    across every market-data provider and hits the on-disk cache.
     """
-    df = yf.download(tickers, period="5d", interval="1d", auto_adjust=True, progress=False)
+    from datetime import datetime, timedelta
+
+    end = datetime.today().strftime("%Y-%m-%d")
+    start = (datetime.today() - timedelta(days=10)).strftime("%Y-%m-%d")
+    df = cached_download(tickers, start=start, end=end, auto_adjust=True, progress=False)
     if df is None or df.empty:
         return {}
     
@@ -397,52 +393,12 @@ def build_trade_plan(
     share_precision: int = 3,
 ) -> dict[str, dict]:
     """
-    Create a per-ticker BUY/SELL/HOLD plan comparing current $ vs target $.
-    Returns: {ticker: {current, target, delta, action, est_price, est_shares}}
-    - min_trade_dollars: ignore tiny adjustments
-    - fractional_ok: if True, shares can be fractional; else we floor to whole shares
+    Disabled legacy helper.
+
+    Research optimizers may compare abstract weights, but production code must
+    not translate them into personalized BUY/SELL/HOLD instructions.
     """
-    
-    all_tickers = sorted(set(current_values.keys()) | set(dollar_targets.keys()))
-    plan = {}
-
-    for t in all_tickers:
-        cur = float(current_values.get(t, 0.0))
-        tgt = float(dollar_targets.get(t, 0.0))
-        delta = round(tgt - cur, 2)
-
-        
-        action = "HOLD"
-        if delta > min_trade_dollars:
-            action = "BUY"
-        elif delta < -min_trade_dollars:
-            action = "SELL"
-
-        price = float(price_map.get(t, 0.0)) if price_map else 0.0
-
-        if price > 0 and action != "HOLD":
-            raw_shares = delta / price
-            if fractional_ok:
-                est_shares = round(raw_shares, share_precision)
-            else:
-                
-                if raw_shares > 0:
-                    est_shares = float(floor(raw_shares))
-                else:
-                    est_shares = float(-floor(abs(raw_shares)))
-        else:
-            est_shares = 0.0
-
-        plan[t] = {
-            "current": round(cur, 2),
-            "target": round(tgt, 2),
-            "delta": delta,
-            "action": action,
-            "est_price": round(price, 4) if price else 0.0,
-            "est_shares": est_shares,
-        }
-
-    return plan
+    raise RuntimeError("Personalized trade-plan generation is disabled.")
 
 
 
@@ -533,6 +489,50 @@ def run_pypfopt_max_sharpe(tickers, start_date, end_date):
 
 
 
+def _validated_allocation(
+    weights: dict,
+    columns,
+    *,
+    prices=None,
+    max_weight: float | None = None,
+    target_vol: float | None = None,
+    tolerance: float = 1e-4,
+) -> dict:
+    """Normalize and post-validate a long-only optimizer result."""
+    columns = list(columns)
+    if not columns:
+        raise ValueError("Optimizer had no usable assets.")
+    values = np.array([float(weights.get(t, 0.0)) for t in columns], dtype=float)
+    if not np.isfinite(values).all():
+        raise ValueError("Optimizer returned non-finite weights.")
+    if np.any(values < -tolerance):
+        raise ValueError("Optimizer returned a negative long-only weight.")
+    values = np.maximum(values, 0.0)
+    total = float(values.sum())
+    if total <= tolerance:
+        raise ValueError("Optimizer returned zero total weight.")
+    values /= total
+    if max_weight is not None and float(values.max()) > float(max_weight) + tolerance:
+        raise ValueError(
+            f"Optimizer violated max_weight={max_weight:.6f}; "
+            f"largest weight was {float(values.max()):.6f}."
+        )
+    if target_vol is not None:
+        if prices is None:
+            raise ValueError("Price history is required to validate target volatility.")
+        rets = prices[columns].pct_change().dropna()
+        if rets.empty:
+            raise ValueError("Not enough returns to validate target volatility.")
+        covariance = (rets.cov() * 252.0).to_numpy(dtype=float)
+        actual_vol = float(np.sqrt(max(values @ covariance @ values, 0.0)))
+        if not np.isfinite(actual_vol) or actual_vol > float(target_vol) + tolerance:
+            raise ValueError(
+                f"No validated allocation met target volatility {target_vol:.2%}; "
+                f"candidate volatility was {actual_vol:.2%}."
+            )
+    return {t: round(float(values[i]), 6) for i, t in enumerate(columns)}
+
+
 def run_max_sharpe_target_vol(tickers, start_date, end_date, target_vol: float):
     """
     Maximize return at (or below) a target annualized volatility — the
@@ -563,21 +563,30 @@ def run_max_sharpe_target_vol(tickers, start_date, end_date, target_vol: float):
         mu = expected_returns.mean_historical_return(prices)
         S = risk_models.CovarianceShrinkage(prices).ledoit_wolf()
 
+        # Determine feasibility explicitly.  Do not interpret every solver/data
+        # exception as "target below frontier" and then return an unrelated
+        # portfolio under a reassuring method label.
+        min_ef = EfficientFrontier(None, S)
+        min_ef.min_volatility()
+        _ret, minimum_vol, _sharpe = min_ef.portfolio_performance()
+        if target_vol + 1e-6 < float(minimum_vol):
+            raise ValueError(
+                f"Target volatility {target_vol:.2%} is below the feasible "
+                f"minimum {float(minimum_vol):.2%}."
+            )
+
         ef = EfficientFrontier(mu, S)
-        try:
-            ef.efficient_risk(target_volatility=target_vol)
-            method = f"max-return@vol={target_vol:.0%}"
-        except Exception:
-            # Target below the achievable frontier — take the least-risk portfolio.
-            ef = EfficientFrontier(mu, S)
-            ef.min_volatility()
-            method = f"min-vol (target {target_vol:.0%} below frontier)"
+        ef.efficient_risk(target_volatility=target_vol)
+        method = f"max-return@vol={target_vol:.0%}"
 
         cleaned = {t: w for t, w in ef.clean_weights().items() if w > 0}
-        total = sum(cleaned.values())
-        if total <= 0:
-            raise ValueError("Optimizer returned zero weights.")
-        return {t: round(w / total, 6) for t, w in cleaned.items()}, prices, method
+        validated = _validated_allocation(
+            cleaned,
+            prices.columns,
+            prices=prices,
+            target_vol=target_vol,
+        )
+        return validated, prices, method
 
     except Exception as e1:
         warnings.warn(f"PyPortfolioOpt efficient_risk failed ({e1}); using SciPy fallback.")
@@ -602,11 +611,15 @@ def run_max_sharpe_target_vol(tickers, start_date, end_date, target_vol: float):
     w0 = np.ones(n) / n
     res = opt.minimize(neg_return, w0, method="SLSQP", bounds=bounds,
                        constraints=cons, options={"maxiter": 500})
-    w = res.x if res.success else w0
-    w = np.maximum(w, 0.0)
-    s = w.sum()
-    w = w / s if s > 0 else np.ones(n) / n
-    cleaned = {cols[i]: round(float(w[i]), 6) for i in range(n)}
+    if not res.success:
+        raise ValueError(f"Target-volatility optimizer failed: {res.message}")
+    candidate = {cols[i]: float(res.x[i]) for i in range(n)}
+    cleaned = _validated_allocation(
+        candidate,
+        cols,
+        prices=prices,
+        target_vol=target_vol,
+    )
     return cleaned, prices, f"scipy max-return@vol<={target_vol:.0%}"
 
 
@@ -654,10 +667,12 @@ def run_min_vol_capped(tickers, start_date, end_date, max_weight: float = 0.15):
         ef = EfficientFrontier(None, S, weight_bounds=(0.0, max_weight))
         ef.min_volatility()
         cleaned = {t: w for t, w in ef.clean_weights().items() if w > 0}
-        total = sum(cleaned.values())
-        if total <= 0:
-            raise ValueError("min_volatility returned zero weights.")
-        return {t: round(w / total, 6) for t, w in cleaned.items()}, prices, "minvol-capped"
+        validated = _validated_allocation(
+            cleaned,
+            prices.columns,
+            max_weight=max_weight,
+        )
+        return validated, prices, "minvol-capped"
 
     except Exception as e1:
         warnings.warn(f"PyPortfolioOpt min-vol failed ({e1}); using SciPy fallback.")
@@ -676,8 +691,15 @@ def run_min_vol_capped(tickers, start_date, end_date, max_weight: float = 0.15):
     w0 = np.ones(n) / n
     res = opt.minimize(variance, w0, method="SLSQP", bounds=bounds, constraints=cons,
                        options={"maxiter": 500})
-    w = res.x if res.success else w0
-    return {cols[i]: round(float(w[i]), 6) for i in range(n)}, prices, "minvol-scipy"
+    if not res.success:
+        raise ValueError(f"Minimum-volatility optimizer failed: {res.message}")
+    candidate = {cols[i]: float(res.x[i]) for i in range(n)}
+    validated = _validated_allocation(
+        candidate,
+        cols,
+        max_weight=max_weight,
+    )
+    return validated, prices, "minvol-scipy"
 
 
 def run_conservative_optimization(tickers, start_date, end_date,
@@ -690,8 +712,10 @@ def run_conservative_optimization(tickers, start_date, end_date,
     """
     opt_w, prices, method = run_min_vol_capped(tickers, start_date, end_date, max_weight)
     cols = list(prices.columns)
+    effective_cap = max(float(max_weight), 1.05 / len(cols))
     eq_w = {t: 1.0 / len(cols) for t in cols}
     blended = _blend_allocations(opt_w, eq_w, 1.0 - eq_blend)
+    blended = _validated_allocation(blended, cols, max_weight=effective_cap)
     return blended, prices, f"{method}+eq(1/N={eq_blend:.0%})"
 
 
@@ -704,7 +728,7 @@ def optimize_portfolio_with_finrl(json_path:str,
                                   fractional_ok: bool = True,
                                   blend_rl_weight: float = 0.5,
                                   target_volatility: float | None = None):
-    #
+    """Offline research optimizer. Never exposed as a public advice endpoint."""
     tickers, mv_map = load_tickers_from_portfolio_json(json_path, include_etfs=include_etfs)
     if not tickers:
         raise ValueError("No tickers found in portfolio.json")
@@ -770,28 +794,12 @@ def optimize_portfolio_with_finrl(json_path:str,
     missing_current = sorted(
         [s for s in GICS_SECTORS if current_sector_pct.get(s, 0) == 0]) if current_sector_pct else []
 
-   
-    pv_used = portfolio_value if isinstance(portfolio_value, (int, float)) else compute_portfolio_value(mv_map)
-
-    dollar_targets = compute_dollar_targets(allocation, pv_used)
-
-   
-    current_dollars = {t: float(mv_map.get(t, 0.0)) for t in allocation.keys()} if mv_map else {t: 0.0 for t in
-                                                                                                allocation.keys()}
-
-    
-    last_prices = get_last_prices(list(allocation.keys()))
-
-    trade_plan = build_trade_plan(
-        current_values=current_dollars,
-        dollar_targets=dollar_targets,
-        price_map=last_prices,
-        min_trade_dollars=min_trade_dollars,
-        fractional_ok=fractional_ok,
-        share_precision=3,
-    )
-
     result = {
+        "research_only": True,
+        "disclaimer": (
+            "Offline model output for methodology research; not a target "
+            "allocation, recommendation, or instruction to trade."
+        ),
         "method": method,
         "target_volatility": target_volatility if (target_volatility and target_volatility > 0) else None,
         "tickers": tickers,
@@ -802,19 +810,12 @@ def optimize_portfolio_with_finrl(json_path:str,
         "underweighted_sectors_recommended": underweighted_recommended,
         "missing_gics_sectors_current": missing_current,
 
-       
-        "portfolio_value_used": round(pv_used, 2),
-        "dollar_targets": dollar_targets,  
-        "current_dollars": {k: round(v, 2) for k, v in current_dollars.items()},
-        "last_prices": last_prices,  
-        "trade_plan": trade_plan,  
     }
     return result
 
 
 def format_optimization_report(result: dict, top_n: int = 10, min_trade_dollars: float = 25.0, max_trades: int = 12) -> str:
     method = result.get("method", "unknown")
-    pv = result.get("portfolio_value_used")
 
     alloc = result.get("final_allocation_weights", {}) or {}
     top_alloc = sorted(alloc.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
@@ -822,19 +823,9 @@ def format_optimization_report(result: dict, top_n: int = 10, min_trade_dollars:
     sec = result.get("sector_allocation_percent", {}) or {}
     sec_sorted = sorted(sec.items(), key=lambda kv: kv[1], reverse=True)
 
-    plan = result.get("trade_plan", {}) or {}
-    moves = []
-    for t, p in plan.items():
-        action = p.get("action")
-        delta = float(p.get("delta", 0.0))
-        if action in ("BUY", "SELL") and abs(delta) >= float(min_trade_dollars):
-            moves.append((t, action, delta, p.get("est_shares", 0.0), p.get("est_price", 0.0)))
-    moves = sorted(moves, key=lambda x: abs(x[2]), reverse=True)[:max_trades]
-
     lines = []
+    lines.append("RESEARCH ONLY — not a recommendation or trade instruction")
     lines.append(f"Optimization method: {method}")
-    if isinstance(pv, (int, float)):
-        lines.append(f"Portfolio value used: ${pv:,.2f}")
     lines.append("")
     lines.append(f"Final allocation (top {len(top_alloc)}):")
     for t, w in top_alloc:
@@ -843,23 +834,18 @@ def format_optimization_report(result: dict, top_n: int = 10, min_trade_dollars:
     lines.append("Sector allocation:")
     for s, pct in sec_sorted:
         lines.append(f"- {s}: {pct:.2f}%")
-    lines.append("")
-    lines.append(f"Trade plan (>|${min_trade_dollars:.0f}|, top {len(moves)}):")
-    if not moves:
-        lines.append("- No trades above threshold.")
-    else:
-        for t, action, delta, shares, price in moves:
-            lines.append(f"- {action} {t}: ${delta:,.2f} (~{shares} shares @ ${price})")
-
     return "\n".join(lines)
 
 
 
 if __name__ == "__main__":
+    import argparse
 
-    json_path = "C:/Users/adity/AI_Financial_Advisor/AI-Portfolio-Assistant/portfolio.json"
+    parser = argparse.ArgumentParser(description="Offline portfolio-model research.")
+    parser.add_argument("portfolio_json", help="Path to a local portfolio JSON file.")
+    args = parser.parse_args()
     out = optimize_portfolio_with_finrl(
-        json_path=json_path,
+        json_path=args.portfolio_json,
         include_etfs=False,
         lookback_years=5,
         finrl_timesteps=25_000,

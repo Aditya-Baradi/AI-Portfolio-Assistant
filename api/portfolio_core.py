@@ -2,81 +2,40 @@
 from typing import Dict, List
 import io
 import json
-import os
 from datetime import datetime, timedelta
-from pathlib import Path
 import ast
 import numpy as np
 import pandas as pd
-import yfinance as yf
 
 try:
     from .data_cache import cached_download, cached_sectors
 except ImportError:  # running outside the package
     from api.data_cache import cached_download, cached_sectors
 
-# In-memory session -> portfolio map populated by /upload
+# Legacy process-local helper for offline callers/tests. Production portfolio
+# state lives only in the encrypted database.
 SESSION_PORTFOLIOS: Dict[str, Dict] = {}
-
-MEMORY_DIR = Path("chat_memory")
-
-
-def _sanitize_session_id(session_id: str) -> str:
-    session_id = (session_id or "anonymous").strip()
-    safe = "".join(ch for ch in session_id if ch.isalnum() or ch in ("-", "_", "@", "."))
-    return safe or "anonymous"
 
 
 def save_session_portfolio(session_id: str, parsed: Dict) -> None:
-    """Store an uploaded portfolio in memory AND on disk so it survives restarts."""
+    """
+    Store a portfolio only in the process-local legacy map.
+
+    Plaintext ``chat_memory/*.portfolio.json`` persistence was intentionally
+    removed; authenticated application state belongs in the encrypted DB.
+    """
     SESSION_PORTFOLIOS[session_id] = parsed
-    try:
-        MEMORY_DIR.mkdir(exist_ok=True)
-        path = MEMORY_DIR / f"{_sanitize_session_id(session_id)}.portfolio.json"
-        path.write_text(json.dumps(parsed, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception:
-        pass  # persistence is best-effort; the in-memory copy still works
-
-
-def _user_id_from_session(session_id: str):
-    """Chat session ids look like 'u{user_id}.c{chat_id}'. Pull the user_id out."""
-    sid = str(session_id or "")
-    if sid.startswith("u") and ".c" in sid:
-        try:
-            return int(sid[1:].split(".c", 1)[0])
-        except (ValueError, IndexError):
-            return None
-    return None
 
 
 def get_session_portfolio(session_id: str):
     """
-    Fetch a session's portfolio. The database is the source of truth: the
-    session id encodes the user, so we read straight from there. This works
-    across multiple workers and — unlike the old module-global cache — can't
-    grow unbounded. Falls back to the legacy in-memory/disk copies only for a
-    non-standard session id (e.g. tests, or portfolios saved before this change).
-    """
-    uid = _user_id_from_session(session_id)
-    if uid is not None:
-        try:
-            from api import db
-            pf = db.get_portfolio(uid)
-            if pf:
-                return pf
-        except Exception:
-            pass  # fall through to legacy caches
+    Fetch a portfolio saved by the legacy process-local helper.
 
-    pf = SESSION_PORTFOLIOS.get(session_id)
-    if pf:
-        return pf
-    path = MEMORY_DIR / f"{_sanitize_session_id(session_id)}.portfolio.json"
-    if path.exists():
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            return None
-    return None
+    Authenticated application state is intentionally not inferred from a
+    session identifier and is never read from plaintext chat-memory files.
+    Production callers must use the encrypted database directly.
+    """
+    return SESSION_PORTFOLIOS.get(session_id)
 
 
 def compute_total_value(holdings_json):
@@ -416,7 +375,7 @@ def _txn_fields(row: Dict):
     def num(v):
         try:
             f = float(v)
-            return f if f == f else None  # filters NaN
+            return f if np.isfinite(f) else None
         except Exception:
             return None
 
@@ -571,6 +530,18 @@ def _download_adj_close_matrix(tickers, start, end) -> pd.DataFrame:
     raw = cached_download(tickers, start=start, end=end, progress=False, auto_adjust=True)
     if raw is None or raw.empty:
         raise RuntimeError(f"No price data returned for {tickers} between {start} and {end}.")
+    raw_attrs = dict(getattr(raw, "attrs", {}) or {})
+    semantics = raw_attrs.get("price_semantics")
+    if semantics:
+        try:
+            from api.market_data import TOTAL_RETURN_SEMANTICS
+        except ImportError:
+            from .market_data import TOTAL_RETURN_SEMANTICS
+        if semantics != TOTAL_RETURN_SEMANTICS:
+            raise RuntimeError(
+                f"Provider returned price semantics {semantics!r}; "
+                f"financial analytics require {TOTAL_RETURN_SEMANTICS!r}."
+            )
 
     if isinstance(raw.columns, pd.MultiIndex):
         lvl0 = set(raw.columns.get_level_values(0))
@@ -590,6 +561,7 @@ def _download_adj_close_matrix(tickers, start, end) -> pd.DataFrame:
         data = data.to_frame()
 
     data = data.dropna(axis=1, how="all").sort_index()
+    data.attrs.update(raw_attrs)
 
     # Repair partial bulk downloads. yfinance occasionally returns full history
     # for some tickers in a batch and almost nothing for the rest. Re-fetch the
@@ -610,6 +582,8 @@ def _download_adj_close_matrix(tickers, start, end) -> pd.DataFrame:
             try:
                 one = cached_download(t, start=start, end=end, progress=False, auto_adjust=True)
                 if one is None or one.empty:
+                    continue
+                if one.attrs.get("price_semantics") not in (None, semantics):
                     continue
                 if isinstance(one.columns, pd.MultiIndex):
                     lvl0 = set(one.columns.get_level_values(0))
@@ -638,7 +612,15 @@ def _download_adj_close_matrix(tickers, start, end) -> pd.DataFrame:
             for t, s in repaired.items():
                 data[t] = s.reindex(new_index)
             data = data.dropna(axis=1, how="all").sort_index()
+            data.attrs.update(raw_attrs)
 
+    missing_after_repair = [ticker for ticker in tickers if ticker not in data.columns]
+    data.attrs["requested_tickers"] = tickers
+    data.attrs["present_tickers"] = [
+        ticker for ticker in tickers if ticker in data.columns
+    ]
+    data.attrs["missing_tickers"] = missing_after_repair
+    data.attrs["complete_coverage"] = not missing_after_repair
     return data
 
 
@@ -660,9 +642,12 @@ def _perf_metrics(returns: pd.Series, rf_annual: float = 0.0) -> dict:
     # Guard against float noise: a constant series has vol ~1e-19, not 0.
     sharpe = (cagr - rf_annual) / vol if vol > 1e-12 else 0.0
 
-    curve = (1.0 + returns).cumprod()
-    peak = curve.cummax()
-    max_dd = float((curve / peak - 1.0).min())
+    # Include the initial unit of capital.  Without it, a loss on the first
+    # observed day becomes the curve's first "peak" and is incorrectly reported
+    # as zero drawdown (e.g. [-50%, +10%] used to produce 0%).
+    curve = np.concatenate(([1.0], (1.0 + returns).cumprod().to_numpy(dtype=float)))
+    peak = np.maximum.accumulate(curve)
+    max_dd = float(np.min(curve / peak - 1.0))
 
     return {
         "total_return": float(total_return),
@@ -682,11 +667,13 @@ def backtest_vs_benchmark(
     rf_annual: float = RF_ANNUAL_DEFAULT,
     cost_bps: float = COST_BPS_DEFAULT,
     return_curves: bool = False,
+    rebalance: str = "daily",
 ) -> dict:
     """
     Backtest a weighted portfolio against a benchmark (default SPY = S&P 500).
 
-    Model: the portfolio is rebalanced daily back to the target weights.
+    `rebalance="daily"` resets to target weights each day. `rebalance="none"`
+    buys once and lets holdings drift for the full window.
     Trading costs are charged at `cost_bps` (one-way, per unit of turnover):
     a full initial purchase for both portfolio and benchmark, plus the daily
     drift-correction turnover for the portfolio. Sharpe uses `rf_annual`.
@@ -698,6 +685,16 @@ def backtest_vs_benchmark(
     """
     if not weights_dict:
         raise ValueError("weights_dict is empty.")
+    if rebalance not in {"daily", "none"}:
+        raise ValueError("rebalance must be 'daily' or 'none'.")
+    try:
+        all_weights = np.array([float(value) for value in weights_dict.values()])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Weights must be numeric.") from exc
+    if not np.isfinite(all_weights).all() or (all_weights < 0).any():
+        raise ValueError("Weights must be finite and non-negative.")
+    if not np.isfinite(float(cost_bps)) or float(cost_bps) < 0:
+        raise ValueError("cost_bps must be finite and non-negative.")
 
     tickers = list(weights_dict.keys())
     prices = _download_adj_close_matrix(tickers + [benchmark], start, end)
@@ -720,7 +717,13 @@ def backtest_vs_benchmark(
 
     rets = prices.pct_change().dropna()
     asset_rets = rets[common]
-    port_rets = asset_rets.dot(w)
+    if rebalance == "daily":
+        port_rets = asset_rets.dot(w)
+    else:
+        positions = (1.0 + asset_rets).cumprod().mul(w, axis=1)
+        curve = positions.sum(axis=1)
+        port_rets = curve.pct_change()
+        port_rets.iloc[0] = float(curve.iloc[0] - 1.0)
     bench_rets = rets[benchmark]
 
     # Align on shared dates.
@@ -731,15 +734,17 @@ def backtest_vs_benchmark(
 
     if cost_bps and cost_bps > 0:
         rate = cost_bps / 10_000.0
-        # Daily turnover needed to rebalance drifted weights back to target.
-        drift = (asset_rets + 1.0).mul(w, axis=1)
-        drift = drift.div(drift.sum(axis=1), axis=0)
-        turnover = (drift - w).abs().sum(axis=1)
-        port_rets = port_rets - turnover * rate
+        if rebalance == "daily":
+            # One-way dollars traded are half the L1 difference between the
+            # drifted and target weights.
+            drift = (asset_rets + 1.0).mul(w, axis=1)
+            drift = drift.div(drift.sum(axis=1), axis=0)
+            turnover = 0.5 * (drift - w).abs().sum(axis=1)
+            port_rets = (1.0 + port_rets) * (1.0 - turnover * rate) - 1.0
         # Both sides pay the initial full purchase (100% turnover).
-        port_rets.iloc[0] -= rate
+        port_rets.iloc[0] = (1.0 + port_rets.iloc[0]) * (1.0 - rate) - 1.0
         bench_rets = bench_rets.copy()
-        bench_rets.iloc[0] -= rate
+        bench_rets.iloc[0] = (1.0 + bench_rets.iloc[0]) * (1.0 - rate) - 1.0
 
     port_m = _perf_metrics(port_rets, rf_annual)
     bench_m = _perf_metrics(bench_rets, rf_annual)
@@ -759,6 +764,7 @@ def backtest_vs_benchmark(
         "benchmark": benchmark,
         "rf_annual": rf_annual,
         "cost_bps": cost_bps,
+        "rebalance": rebalance,
         "tickers_used": common,
         "tickers_dropped": dropped,
         "weights_used": {t: round(float(x), 6) for t, x in zip(common, w)},
@@ -841,6 +847,138 @@ def holdings_info(pf) -> dict:
                 pass
 
     return {t: m for t, m in info.items() if m["shares"] > 0 or m["stored_value"] > 0}
+
+
+def live_portfolio_valuation(
+    pf,
+    *,
+    price_frame: pd.DataFrame | None = None,
+    lookback_days: int = 14,
+    max_stale_market_days: int = 3,
+) -> dict:
+    """
+    Canonical current valuation for an imported holdings snapshot.
+
+    Imported ``shares`` are current share counts.  They must never be multiplied
+    by splits again merely because a purchase date is present.  Adjusted close
+    history already handles corporate actions historically; its latest point is
+    anchored to the latest quoted close.
+
+    The return value makes every fallback explicit so callers can choose whether
+    stored import-time values are acceptable for their use case.
+    """
+    info = holdings_info(pf)
+    tickers = list(info)
+    if not tickers:
+        return {
+            "values": {},
+            "prices": {},
+            "shares": {},
+            "total_value": 0.0,
+            "as_of": None,
+            "ticker_as_of": {},
+            "fallback_tickers": [],
+            "source_provider": None,
+            "price_semantics": None,
+        }
+
+    if price_frame is None:
+        end_dt = datetime.today()
+        start_dt = end_dt - timedelta(days=max(7, int(lookback_days)))
+        try:
+            price_frame = _download_adj_close_matrix(
+                tickers,
+                start_dt.strftime("%Y-%m-%d"),
+                end_dt.strftime("%Y-%m-%d"),
+            )
+        except Exception:
+            price_frame = pd.DataFrame()
+
+    attrs = dict(getattr(price_frame, "attrs", {}) or {})
+    global_latest = None
+    if price_frame is not None and not price_frame.empty:
+        try:
+            global_latest = pd.Timestamp(price_frame.index.max()).tz_localize(None)
+        except Exception:
+            global_latest = None
+
+    prices: dict[str, float] = {}
+    values: dict[str, float] = {}
+    shares_out: dict[str, float] = {}
+    ticker_as_of: dict[str, str | None] = {}
+    accepted_dates: list[pd.Timestamp] = []
+    fallback: list[str] = []
+    for ticker, meta in info.items():
+        shares = float(meta.get("shares") or 0.0)
+        shares_out[ticker] = shares
+        price = None
+        observed_at = None
+        if (
+            price_frame is not None
+            and not price_frame.empty
+            and ticker in price_frame.columns
+        ):
+            observed = price_frame[ticker].dropna()
+            if not observed.empty:
+                observed_at = pd.Timestamp(observed.index[-1]).tz_localize(None)
+                candidate = float(observed.iloc[-1])
+                market_days_old = (
+                    int(np.busday_count(
+                        np.datetime64(observed_at.date()),
+                        np.datetime64(global_latest.date()),
+                    ))
+                    if global_latest is not None and observed_at < global_latest
+                    else 0
+                )
+                if candidate > 0 and market_days_old <= max(0, int(max_stale_market_days)):
+                    price = candidate
+        ticker_as_of[ticker] = (
+            observed_at.strftime("%Y-%m-%d") if observed_at is not None else None
+        )
+        if shares > 0 and price is not None:
+            prices[ticker] = price
+            values[ticker] = shares * price
+            accepted_dates.append(observed_at)
+        else:
+            stored = float(meta.get("stored_value") or 0.0)
+            values[ticker] = max(stored, 0.0)
+            fallback.append(ticker)
+
+    # A combined valuation cannot truthfully be newer than its oldest accepted
+    # component price.
+    as_of = min(accepted_dates).strftime("%Y-%m-%d") if accepted_dates else None
+
+    return {
+        "values": values,
+        "prices": prices,
+        "shares": shares_out,
+        "total_value": float(sum(values.values())),
+        "as_of": as_of,
+        "ticker_as_of": ticker_as_of,
+        "fallback_tickers": sorted(fallback),
+        "source_provider": attrs.get("source_provider"),
+        "price_semantics": attrs.get("price_semantics"),
+    }
+
+
+def buy_and_hold_returns(prices: pd.DataFrame, weights: dict) -> pd.Series:
+    """
+    Returns of a hypothetical buy-and-hold basket with no intra-period
+    rebalancing.  `weights` are normalized at the first common price date.
+    """
+    usable = [t for t, value in weights.items() if value > 0 and t in prices.columns]
+    if not usable:
+        raise ValueError("No positive weights have usable price history.")
+    aligned = prices[usable].ffill().dropna(how="any")
+    if len(aligned) < 2:
+        raise ValueError("Not enough common price history.")
+    raw_w = np.array([float(weights[t]) for t in usable], dtype=float)
+    if not np.isfinite(raw_w).all() or raw_w.sum() <= 0:
+        raise ValueError("Weights must be finite and positive.")
+    w = raw_w / raw_w.sum()
+    normalized = aligned.div(aligned.iloc[0])
+    curve = normalized.mul(w, axis=1).sum(axis=1)
+    return curve.pct_change().dropna()
 
 
 def compute_portfolio_metrics(tickers, start, end, weights_json=None, benchmark="SPY"):

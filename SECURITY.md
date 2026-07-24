@@ -1,77 +1,151 @@
 # Security notes
 
 Running record of the app's security posture: what's hardened, what's a known
-risk, and why. Audit dependencies with `python-dotenv`-style pins in
-`requirements.txt`; run `pip-audit` against the **installed environment**
-(`python -m pip_audit`), not `-r requirements.txt` — see the CI note below.
+risk, and why. Audit the shipped manifest with
+`pip-audit -r requirements.txt --strict` (CI fails on a finding).
+
+## Reporting a vulnerability
+
+Email **[SECURITY CONTACT — complete before publishing]**. Please don't open a
+public issue for anything exploitable. We'll acknowledge within 3 working days.
 
 ## Hardened
 
 - **Auth:** bcrypt (cost 12), session tokens stored SHA-256-hashed, constant-time
-  login, per-IP rate limiting, optional TOTP 2FA, parameterized SQL.
-- **Email verification + password reset:** single-use, hashed, expiring tokens;
-  `/auth/forgot` never reveals whether an account exists; reset revokes all sessions.
+  login, per-IP rate limiting, **per-account lockout**, optional TOTP 2FA,
+  parameterized SQL.
+- **Sessions:** sliding idle expiry (2 days), an absolute cap (7 days), and at
+  most 10 concurrent sessions per user. The client is prompted to rotate after
+  12 hours, but rotation is not automatic revocation: an unrevoked stolen token
+  can remain valid until idle/absolute expiry (at most 7 days).
+- **Encryption at rest:** portfolios, investor profiles and TOTP secrets are
+  encrypted with **envelope encryption** (`api/crypto.py`). A master key from
+  the environment wraps a data key held in the database; the data key encrypts
+  the fields. A stolen `app.db` yields neither holdings nor working 2FA secrets.
+  Rotating the master key re-wraps one row — no data migration. Legacy
+  plaintext rows are detected and migrated transparently on startup.
+- **Email verification is enforced for protected product features.** Unverified
+  accounts retain authentication, account/legal self-service, `/me`, and resend,
+  but cannot upload financial data, call analytics, or spend model credit.
 - **XSS:** all untrusted data (news headlines, tickers, holdings, alerts, audit
   IPs) is HTML-escaped before rendering; link URLs are scheme-validated
-  (`http(s)` only).
+  (`http(s)` only); assistant markdown is escaped *before* it is parsed.
 - **CSP:** `script-src` uses a fresh per-request nonce with **no `unsafe-inline`**,
-  so injected script cannot execute even if escaping is bypassed. `style-src`
-  keeps `unsafe-inline` (inline styles can't exfiltrate; there are hundreds of them).
-- **Reverse proxy:** client IP is taken from the rightmost `X-Forwarded-For`
-  entry (the value Caddy appends), so rate limiting and audit logs see real IPs
-  and can't be spoofed by a client prepending their own header.
-- **Uploads:** rejected via `Content-Length` before reading, and the read is
-  capped, so a large upload can't exhaust memory.
-- **Container:** runs as an unprivileged user; build tooling (`pip`,
-  `setuptools`) is upgraded during the image build.
+  plus `frame-ancestors 'none'`, `object-src 'none'`, `base-uri 'self'` and
+  `form-action 'self'`. `style-src` keeps `unsafe-inline` (inline styles can't
+  exfiltrate; there are hundreds of them). HSTS is set when served over TLS.
+- **Reverse proxy:** application code uses only `request.client`. Uvicorn
+  rewrites it from forwarding headers only when the socket peer is in the
+  explicit trusted-proxy allow-list (Caddy's fixed Compose IP by default);
+  wildcard proxy trust is forbidden.
+- **Request bodies:** a global ASGI cap rejects oversized declared and chunked
+  bodies before endpoint parsing; portfolio upload also performs its own
+  bounded read.
+- **Agent:** direct OpenAI SDK tool calling (no LangChain runtime), capped at six
+  tool rounds with bounded tool output/history/session cache. Tool schemas never
+  contain a user, chat, session, path, or database identifier; authenticated
+  context is bound by the server-side dispatcher. A deterministic output filter
+  blocks obvious personalized trade instructions if model prompting regresses.
+- **Observability:** structured JSON logs with request correlation, credential
+  scrubbing across messages/tracebacks/context, and production-required Sentry
+  with request bodies/PII disabled and outbound event scrubbing.
+- **Container:** deny-by-default build context, multi-stage image, exact base
+  tag, unprivileged/read-only runtime, bounded ephemeral Redis, and `/healthz`.
+- **CI:** production dependency resolution and blocking audit (no blanket
+  ignores), tests, real Redis integration, isolated RL-manifest resolution,
+  correctness lint, Docker/Compose smoke, and full-history secret scanning.
+
+## Startup audit
+
+`api/backend.py` runs `_startup_audit()` on boot. With
+`EVERGREEN_ENV=production` **the app refuses to start** unless:
+
+- `EVERGREEN_MASTER_KEY` is set (otherwise secrets rest under a dev key file),
+- `MARKET_DATA_PROVIDER` is a provider for which the operator has verified the
+  actual contract permits this public display/redistribution,
+- `MARKET_DATA_REDISTRIBUTION_ENTITLED` explicitly confirms the operator's
+  contract permits this public use,
+- `BACKUP_ENCRYPTION_KEY` is valid and distinct from the master key,
+- Redis, public URL/CORS, verified email delivery, OpenAI, Sentry, operator
+  identity/retention fields, hosting region, and confirmed legal review are set.
+
+`GET /healthz` reports the same checks as `production_ready`.
+
+## Market data licensing (a legal risk, not just a technical one)
+
+The default provider, **yfinance, uses Yahoo endpoints for which this project
+has not established public display, redistribution, or commercial-use
+rights.** It is blocked in production. Operationally it is also prone to rate
+limits, IP blocks, and upstream schema changes.
+
+`api/market_data.py` makes the provider swappable. Selecting a provider or
+buying an API plan is not proof of public redistribution rights:
+
+| Provider | Commercial plans exist | Notes |
+|---|---|---|
+| `yfinance` (default) | N/A | No public-use rights established by this project; blocked in production. |
+| `stooq` | N/A | Keyless development fallback; no public-use rights claimed; blocked in production. |
+| `tiingo` | Adapter available | `TIINGO_API_KEY`; the operator must verify its executed contract permits this exact use. |
+| `polygon` | Adapter available | `POLYGON_API_KEY`; the operator must verify its executed contract permits this exact use. |
 
 ## Known dependency risks (assessed, deferred with rationale)
 
-The ML stack (`finrl`, `stable-baselines3`, `torch`) constrains upgrades, and
-several CVEs are not reachable given how the app uses these libraries.
+The RL stack is now **optional and excluded from the shipped image**
+(`requirements-rl.txt`), which removes the large majority of the project's
+advisory surface from a default deployment.
 
 | Package | Status | Rationale / plan |
 |---|---|---|
-| **torch 2.2.2** | Deferred | ~40 advisories, almost all are `torch.load`/deserialization of **untrusted checkpoints** or unsafe operators. This app only trains and loads **its own** models — no user-supplied model files reach torch, so the practical exposure is low. Upgrading is pinned by `stable-baselines3`/`finrl`; plan is to test `torch>=2.6` on a branch against the FinRL path before bumping. |
-| **langchain 0.1.20 / -core 0.1.52** | Deferred | Serious advisories are in `langchain-experimental` and specific document loaders, none of which this app imports. The 0.2/0.3 migration is a scoped effort, not a drop-in bump. |
-| **urllib3 1.26.20** | Deferred | Latest 1.26.x; 2.x fixes several advisories but may conflict with libs pinning `<2`. Bump when the tree allows. |
-| **scikit-learn 1.3.2** | Deferred | PYSEC-2024-110 (TfidfVectorizer data leak) — not on a user-facing path here. Bumping risks the pinned numeric stack; revisit with the torch branch. |
-| requests, python-multipart, python-dotenv | **Fixed** | Bumped to patched versions. |
-| pip, setuptools | **Fixed** | Upgraded in the Docker build. |
+| **torch 2.2.2** | Not installed by default | ~40 advisories, almost all `torch.load`/deserialization of **untrusted checkpoints**. Now confined to the opt-in RL extra; the default image and CI never install it. |
+| **scikit-learn** | **Current** | Core pin moved off the previously deferred vulnerable 1.3 line. |
+| OpenAI, requests, python-multipart, python-dotenv, cryptography, Redis, Sentry | **Current** | Exact direct pins; the blocking core audit has no blanket vulnerability ignores. |
+| pip, setuptools | **Current** | Upgraded in the Docker build. |
 
-## Deployment constraint: run a single worker (until state moves to Redis)
+## Deployment constraint: one process/replica while using SQLite
 
-Some state is held in process memory and is **not shared across workers**:
+Without `REDIS_URL`, this security state is process-local (`api/state.py`):
 
-- the auth rate-limiter map and the pending-2FA / 2FA-setup maps (`backend.py`),
-- the FinRL concurrency semaphore (`langchain_tools.py`).
+- auth rate-limit windows and per-account lockout counters,
+- pending-2FA and 2FA-setup handles.
 
-The Docker image runs one uvicorn worker (the default), which is correct. **Do
-not add `--workers N` (>1) or run multiple app replicas** without first moving
-this state to a shared store (Redis): with >1 worker, rate limiting fragments,
-in-progress 2FA logins fail intermittently, and the FinRL cap stops being global.
-Portfolios and chat history are already in SQLite, so those are safe across
-workers — it's only the in-memory maps above that pin us to one process.
+Redis is mandatory for production so those controls are global. That does not
+make the application horizontally scalable: portfolios, chats, quotas, and
+other writes still share SQLite, and long-running job capacity is not
+distributed. Keep one app process/replica until both are moved to managed,
+distributed services.
 
-Bounded/evicted state (no longer a leak): portfolios are read per-request from
-the database (no growing in-memory cache), `chat_memory/` is age-pruned to
-30 days, and concurrent FinRL runs are capped at 2.
+If Redis is unreachable, the backend downgrades to memory and the production
+startup audit refuses to serve. Compose bounds Redis at 128 MiB with LFU
+eviction because the data is short-lived. An eviction can discard a cold
+lockout/rate-limit/2FA handle, so alert on Redis memory and eviction metrics.
 
-## CI prerequisite: `requirements.txt` is not cleanly installable
+## Backups and key custody
 
-`pip install -r requirements.txt` currently fails to resolve: `yfinance` needs
-`websockets>=12` (we pin `13.1`), but `alpaca-trade-api==3.2.0` (an eager FinRL
-import dep) requires `websockets<11`. The local venv works only because it was
-installed in a way that let `websockets 13.1` win. This is why `pip-audit -r`
-fails and why CI can't do a clean install.
+`scripts/backup_db.py` takes consistent snapshots using SQLite's online backup
+API, compresses them, then applies streaming authenticated encryption with a
+separate `BACKUP_ENCRYPTION_KEY`. Production backup creation refuses a missing,
+invalid, or reused key. Verification decrypts, decompresses, and runs SQLite
+integrity checks; restore publishes a verified database atomically while the
+app is stopped.
 
-**To unblock reproducible installs + CI, pick one:**
-1. Drop `alpaca-trade-api`/`wrds` and confirm FinRL still imports (its import is
-   already guarded; if it fails, `FINRL_AVAILABLE=False` and the app falls back
-   to PyPortfolioOpt — a product tradeoff to decide deliberately).
-2. Move the RL stack (`finrl`, `torch`, `stable-baselines3`, `alpaca`, ...) into
-   an optional `requirements-rl.txt`, so the core app + tests install cleanly and
-   CI runs fast, with RL as an opt-in extra.
+**Neither key is in the backup.** Keep the master and backup-encryption keys in
+separate secret-manager/DR custody, copy encrypted backups off-host, alert on
+missed schedules, and rehearse a restore at least quarterly.
 
-Option 2 is recommended: it makes the core app cleanly installable, lets CI run
-the full test suite, and isolates the heavy/conflicting ML dependencies.
+> **Losing the master key means losing every portfolio in the database.**
+> There is no recovery path by design: if the key could be recovered from the
+> database, encrypting the database would be pointless. Treat key custody with
+> the same seriousness as the backups themselves, and never start the app with
+> a throwaway key against a database you care about — it will encrypt data under
+> a key you don't have.
+
+## Still outstanding
+
+- Browser sessions use `HttpOnly; SameSite=Strict` cookies, and API Bearer
+  tokens remain supported. There is no separate synchronizer CSRF token; the
+  current cross-site request defense relies on the strict SameSite cookie,
+  same-origin browser requests, and the CORS allow-list.
+- Chat messages and the portfolio context are sent to a third-party model
+  provider. Disclosed in the Privacy Policy; there is no way around it short of
+  self-hosting a model.
+- No formal penetration test has been performed.

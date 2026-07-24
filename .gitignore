@@ -37,6 +37,11 @@ Thumbs.db
 .env
 api/.env
 
+# Development-only master encryption key, auto-generated when
+# EVERGREEN_MASTER_KEY is unset. NEVER commit this, and never use it in
+# production — see api/crypto.py.
+.evergreen_key
+
 # =========================
 # Generated / runtime data
 # =========================
@@ -45,9 +50,43 @@ portfolio.json
 cache/
 charts/
 results/
+backups/
+
+# SQLite databases (dev DB + WAL/SHM sidecars, and any test-created *.db).
+# Test suites write to pytest's tmp_path, but ignore the whole family so a
+# stray database can never be committed.
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+
+# =========================
+# Test / lint / type-check artifacts
+# =========================
 .pytest_cache/
-app.db
-app.db-*
+.ruff_cache/
+.mypy_cache/
+.dmypy.json
+.hypothesis/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+
+# E2E / ad-hoc scratch runs (e.g. .tmp-e2e-YYYYMMDD/) and editor/merge leftovers.
+.tmp-*/
+*.tmp
+*.bak
+*.orig
+
+# =========================
+# Python packaging
+# =========================
+*.egg-info/
+.eggs/
+*.egg
 
 
 # =========================

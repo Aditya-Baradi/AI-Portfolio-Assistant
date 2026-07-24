@@ -9,7 +9,6 @@ direct labels at the line ends so identity never relies on color alone.
 from __future__ import annotations
 
 import uuid
-from pathlib import Path
 
 import matplotlib
 
@@ -18,7 +17,9 @@ import matplotlib.dates as mdates  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 import pandas as pd  # noqa: E402
 
-CHARTS_DIR = Path("charts")
+from api.db import data_dir
+
+CHARTS_DIR = data_dir() / "charts"
 
 INK = "#201f1b"
 MUTED = "#6f6a60"
